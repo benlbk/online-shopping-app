@@ -1,35 +1,39 @@
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 
 let pool: Pool | null = null;
 
-export function getDbPool(): Pool {
+export function getPool(): Pool {
   if (!pool) {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: {
-        rejectUnauthorized: true,
-        ca: process.env.DB_CA_CERT
+        rejectUnauthorized: process.env.NODE_ENV === 'production'
       },
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      max: 1, // Limit connections for serverless
+      idleTimeoutMillis: 120000, // Close idle connections after 2 minutes
+      connectionTimeoutMillis: 5000 // Connection timeout
     });
   }
   return pool;
 }
 
+export async function getDbConnection(): Promise<PoolClient> {
+  const pool = getPool();
+  return await pool.connect();
+}
+
 export async function checkDatabaseConnection(): Promise<boolean> {
+  let client: PoolClient | null = null;
   try {
-    const pool = getDbPool();
-    const client = await pool.connect();
-    try {
-      await client.query('SELECT 1');
-      return true;
-    } finally {
+    client = await getDbConnection();
+    const result = await client.query('SELECT 1');
+    return result.rows.length === 1;
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    return false;
+  } finally {
+    if (client) {
       client.release();
     }
-  } catch (error) {
-    console.error('Database connection check failed:', error);
-    return false;
   }
 }
