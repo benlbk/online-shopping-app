@@ -1,57 +1,41 @@
-import { cache } from 'react';
+import { Pool } from 'pg';
 
-interface DatabaseStatus {
-  isConnected: boolean;
-  lastChecked: number;
+let pool: Pool;
+
+export async function getDbConnection() {
+  if (!pool) {
+    const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
+    
+    // Validate required credentials
+    if (!DB_HOST || !DB_PORT || !DB_NAME || !DB_USER || !DB_PASSWORD) {
+      throw new Error('Missing required database configuration');
+    }
+
+    pool = new Pool({
+      host: DB_HOST,
+      port: parseInt(DB_PORT, 10),
+      database: DB_NAME,
+      user: DB_USER,
+      password: DB_PASSWORD,
+      ssl: process.env.NODE_ENV === 'production',
+      connectionTimeoutMillis: 2000
+    });
+  }
+  return pool;
 }
 
-let cachedStatus: DatabaseStatus = {
-  isConnected: false,
-  lastChecked: 0
-};
-
-const CACHE_TTL = 10000; // 10 seconds
-const DB_TIMEOUT = 2000; // 2 seconds
-
-/**
- * Check database connection with caching
- */
-export const checkDatabaseConnection = cache(async (): Promise<boolean> => {
-  const now = Date.now();
-  
-  // Return cached result if still valid
-  if (now - cachedStatus.lastChecked < CACHE_TTL) {
-    return cachedStatus.isConnected;
-  }
-
+export async function checkDatabaseConnection(): Promise<boolean> {
   try {
-    // Simulate database connection check
-    // Replace with actual database connection check
-    const checkPromise = new Promise<boolean>((resolve) => {
-      // Simulate DB check that usually succeeds
-      setTimeout(() => resolve(true), 100);
-    });
-
-    // Add timeout
-    const timeoutPromise = new Promise<boolean>((_, reject) => {
-      setTimeout(() => reject(new Error('Database check timeout')), DB_TIMEOUT);
-    });
-
-    const isConnected = await Promise.race([checkPromise, timeoutPromise]);
-
-    cachedStatus = {
-      isConnected,
-      lastChecked: now
-    };
-
-    return isConnected;
-
+    const client = await getDbConnection();
+    const result = await Promise.race([
+      client.query('SELECT 1'),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('DB timeout')), 2000)
+      )
+    ]);
+    return !!result;
   } catch (error) {
-    console.error('Database connection check failed:', error);
-    cachedStatus = {
-      isConnected: false,
-      lastChecked: now
-    };
+    console.error('Database health check failed:', error);
     return false;
   }
-});
+}
