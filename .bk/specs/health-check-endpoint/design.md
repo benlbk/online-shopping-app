@@ -2,62 +2,48 @@
 
 ## System Architecture
 
+### Endpoint Design
+- Path: GET /health
+- Response format: application/json
+- Status codes: 200 OK, 503 Service Unavailable
+
+### Response Schema
+```json
+{
+  "status": "string",
+  "uptime_seconds": "number",
+  "database_connected": "boolean"
+}
+```
+
+## Technical Implementation
+
 ### Components
-- Health Controller - Handles HTTP requests
-- Health Service - Aggregates health data
-- Database Health Checker - Validates database connectivity
-- Uptime Tracker - Tracks service uptime
+1. Health Controller
+   - Handles HTTP requests
+   - Aggregates health information
 
-### Data Flow
-1. Client requests GET /health
-2. Health Controller receives request
-3. Health Service collects status data
-4. Database Health Checker performs connection test
-5. Response assembled and returned
-
-## API Contract
-
-```
-GET /health
-
-Responses:
-200 OK
-{
-  "status": "healthy",
-  "uptime_seconds": number,
-  "database_connected": boolean
-}
-
-503 Service Unavailable
-{
-  "status": "unhealthy",
-  "uptime_seconds": number,
-  "database_connected": false
-}
-```
-
-## Technical Decisions
+2. Health Service
+   - Tracks service uptime
+   - Checks database connectivity
+   - Caches health check results
 
 ### Database Health Check
-- Use connection pool ping/test query
-- Implement with timeout (max 2 seconds)
-- Cache result for 30 seconds to prevent excess load
+- Use connection pool ping
+- Implement timeout (2 seconds max)
+- Cache result for 10 seconds to prevent database stress
 
-### Uptime Tracking
-- Store service start time in memory
-- Calculate uptime on each request
+### Error Handling
+- Database timeout returns 503
+- Internal errors return 503
+- Include error details in status field
 
-## Error Handling
-- Timeout for database checks
-- Graceful handling of unexpected errors
-- Logging of health check failures
+### Security Considerations
+- Rate limiting: 10 requests per minute per IP
+- No sensitive information in response
+- Available without authentication
 
-## Security Considerations
-- No authentication required
-- Rate limiting to prevent DoS
-- No sensitive information exposure
-
-## Performance
-- Caching of database status
-- Lightweight checks
-- Minimal processing overhead
+### Performance
+- Cache health check results
+- Async database checks
+- Minimal computation overhead
