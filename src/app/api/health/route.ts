@@ -1,80 +1,74 @@
 import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import { checkDatabaseConnection } from '@/lib/db';
 import { getUptime } from '@/lib/health';
 import { RateLimiter } from '@/lib/rate-limiter';
 
+// Initialize rate limiter with Redis backend
 const rateLimiter = new RateLimiter({
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 10,
-  trustProxy: true
+  max: 10 // 10 requests per window
 });
 
-const CACHE_TTL = 10000; // 10 seconds
-let healthCache: {
-  timestamp: number;
-  response: NextResponse;
-} | null = null;
+// Cache health check results
+let healthCache = {
+  timestamp: 0,
+  result: null,
+  ttl: 10000 // 10 second cache
+};
 
-export async function GET(request: Request) {
-  // Rate limiting check
-  const clientIp = request.headers.get('x-forwarded-for') || '127.0.0.1';
-  if (!rateLimiter.checkLimit(clientIp)) {
-    return NextResponse.json(
-      { status: 'error', message: 'Too many requests' },
-      { status: 429 }
-    );
-  }
-
-  // Return cached response if valid
-  if (healthCache && Date.now() - healthCache.timestamp < CACHE_TTL) {
-    return healthCache.response;
-  }
-
+export async function GET() {
   try {
-    // Database check with timeout
-    const dbConnected = await Promise.race([
-      checkDatabaseConnection(),
-      new Promise<boolean>((_, reject) => 
-        setTimeout(() => reject(new Error('Database timeout')), 2000)
-      )
-    ]);
+    // Get client IP safely
+    const headersList = headers();
+    const forwardedFor = headersList.get('x-forwarded-for');
+    const clientIp = forwardedFor ? forwardedFor.split(',')[0] : 'unknown';
 
-    const uptime = getUptime();
+    // Rate limit by IP
+    const rateLimitResult = await rateLimiter.check(clientIp);
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json(
+        { status: 'error', message: 'Rate limit exceeded' },
+        { status: 429 }
+      );
+    }
+
+    // Check cache
+    const now = Date.now();
+    if (healthCache.result && (now - healthCache.timestamp) < healthCache.ttl) {
+      return healthCache.result;
+    }
+
+    // Get health status
+    const dbConnected = await checkDatabaseConnection();
+    const uptimeSeconds = getUptime();
+
     const status = dbConnected ? 'healthy' : 'degraded';
     const statusCode = dbConnected ? 200 : 503;
 
-    const response = NextResponse.json(
-      {
-        status,
-        uptime_seconds: uptime,
-        database_connected: dbConnected
-      },
-      {
-        status: statusCode,
-        headers: {
-          'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-          'Cache-Control': 'no-store'
-        }
-      }
-    );
+    const response = NextResponse.json({
+      status,
+      uptime_seconds: uptimeSeconds,
+      database_connected: dbConnected
+    }, { status: statusCode });
 
-    // Cache successful responses
-    if (statusCode === 200) {
-      healthCache = {
-        timestamp: Date.now(),
-        response: response.clone()
-      };
-    }
+    // Update cache
+    healthCache = {
+      timestamp: now,
+      result: response,
+      ttl: healthCache.ttl
+    };
 
     return response;
+
   } catch (error) {
-    return NextResponse.json(
-      {
-        status: 'unhealthy',
-        uptime_seconds: getUptime(),
-        database_connected: false
-      },
-      { status: 503 }
-    );
+    // Log error safely without exposing details
+    console.error('Health check error:', error.message);
+    
+    return NextResponse.json({
+      status: 'error',
+      uptime_seconds: getUptime(),
+      database_connected: false
+    }, { status: 503 });
   }
 }
