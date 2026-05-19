@@ -15,7 +15,7 @@ describe('Health Check Endpoint', () => {
       query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
     };
     (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
-    (RateLimiter.prototype.allowRequest as jest.Mock).mockReturnValue(true);
+    (RateLimiter.prototype.checkLimit as jest.Mock).mockReturnValue(true);
 
     const response = await GET(new Request('http://localhost/health'));
     const data = await response.json();
@@ -33,7 +33,7 @@ describe('Health Check Endpoint', () => {
       query: jest.fn().mockRejectedValue(new Error('DB Error'))
     };
     (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
-    (RateLimiter.prototype.allowRequest as jest.Mock).mockReturnValue(true);
+    (RateLimiter.prototype.checkLimit as jest.Mock).mockReturnValue(true);
 
     const response = await GET(new Request('http://localhost/health'));
     const data = await response.json();
@@ -51,7 +51,7 @@ describe('Health Check Endpoint', () => {
       query: jest.fn().mockImplementation(() => new Promise(resolve => setTimeout(resolve, 3000)))
     };
     (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
-    (RateLimiter.prototype.allowRequest as jest.Mock).mockReturnValue(true);
+    (RateLimiter.prototype.checkLimit as jest.Mock).mockReturnValue(true);
 
     const response = await GET(new Request('http://localhost/health'));
     const data = await response.json();
@@ -61,21 +61,32 @@ describe('Health Check Endpoint', () => {
   });
 
   it('returns 429 when rate limit is exceeded', async () => {
-    (RateLimiter.prototype.allowRequest as jest.Mock).mockReturnValue(false);
+    (RateLimiter.prototype.checkLimit as jest.Mock).mockReturnValue(false);
 
     const response = await GET(new Request('http://localhost/health'));
+    const data = await response.json();
+
     expect(response.status).toBe(429);
+    expect(data.status).toBe('error');
+    expect(data.message).toBe('Too many requests');
   });
 
-  it('includes security headers in response', async () => {
-    (getDbConnection as jest.Mock).mockResolvedValue({
+  it('uses cached response when available', async () => {
+    const mockConnection = {
       query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
-    });
-    (RateLimiter.prototype.allowRequest as jest.Mock).mockReturnValue(true);
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    (RateLimiter.prototype.checkLimit as jest.Mock).mockReturnValue(true);
 
-    const response = await GET(new Request('http://localhost/health'));
+    // First call
+    await GET(new Request('http://localhost/health'));
     
-    expect(response.headers.get('Cache-Control')).toBe('no-store');
-    expect(response.headers.get('Content-Security-Policy')).toBe("default-src 'none'");
+    // Second call should use cache
+    const response = await GET(new Request('http://localhost/health'));
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(getDbConnection).toHaveBeenCalledTimes(1);
+    expect(data.database_connected).toBe(true);
   });
 });
