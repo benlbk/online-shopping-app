@@ -1,46 +1,52 @@
-import { Redis } from '@upstash/redis';
+import { Redis } from 'ioredis';
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_URL!,
-  token: process.env.UPSTASH_REDIS_TOKEN!
-});
+const redis = new Redis(process.env.REDIS_URL);
 
-type RateLimitResponse = {
+interface RateLimitConfig {
+  interval: number; // Time window in milliseconds
+  maxRequests: number; // Maximum requests allowed in interval
+}
+
+interface RateLimitResult {
   success: boolean;
   remaining: number;
-};
+  resetTime: number;
+}
 
-export const rateLimit = {
-  async check(
-    identifier: string,
-    limit: number,
-    window: string
-  ): Promise<RateLimitResponse> {
-    const key = `rate-limit:${identifier}`;
-    const windowMs = ms(window);
+export function rateLimit(config: RateLimitConfig) {
+  return {
+    async check(key: string): Promise<RateLimitResult> {
+      const now = Date.now();
+      const windowStart = now - config.interval;
+      
+      // Remove old entries
+      await redis.zremrangebyscore(`ratelimit:${key}`, 0, windowStart);
+      
+      // Count requests in current window
+      const requestCount = await redis.zcard(`ratelimit:${key}`);
+      
+      if (requestCount >= config.maxRequests) {
+        const oldestRequest = await redis.zrange(`ratelimit:${key}`, 0, 0);
+        const resetTime = oldestRequest.length ? parseInt(oldestRequest[0]) + config.interval : now + config.interval;
+        
+        return {
+          success: false,
+          remaining: 0,
+          resetTime
+        };
+      }
+      
+      return {
+        success: true,
+        remaining: config.maxRequests - requestCount,
+        resetTime: now + config.interval
+      };
+    },
 
-    const [count] = await redis
-      .multi()
-      .incr(key)
-      .expire(key, Math.floor(windowMs / 1000))
-      .exec();
-
-    const remaining = Math.max(0, limit - (count as number));
-
-    return {
-      success: (count as number) <= limit,
-      remaining
-    };
-  }
-};
-
-function ms(str: string): number {
-  const map: Record<string, number> = {
-    m: 60 * 1000,
-    h: 60 * 60 * 1000,
-    d: 24 * 60 * 60 * 1000
+    async increment(key: string): Promise<void> {
+      const now = Date.now();
+      await redis.zadd(`ratelimit:${key}`, now, now.toString());
+      await redis.expire(`ratelimit:${key}`, Math.ceil(config.interval / 1000));
+    }
   };
-  const match = str.match(/^(\d+)([mhd])$/);
-  if (!match) throw new Error('Invalid time format');
-  return parseInt(match[1]) * map[match[2]];
 }
