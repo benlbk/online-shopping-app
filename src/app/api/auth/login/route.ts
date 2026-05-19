@@ -4,36 +4,31 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { signJWT } from '@/lib/jwt';
 import { rateLimit } from '@/lib/rate-limit';
-import { passwordStrength } from '@/lib/password';
+import { timingSafeEqual } from 'crypto';
 
-// Input validation schema
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8)
 });
 
-// Rate limiter configuration
-const limiter = rateLimit({
-  interval: 15 * 60 * 1000, // 15 minutes
-  uniqueTokenPerInterval: 500,
-  maxRequests: 5 // 5 attempts per 15 min window
-});
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+const RESET_RATE_LIMIT = 3; // 3 attempts per 24h
 
 export async function POST(req: Request) {
   try {
-    // Rate limiting check
-    const ip = req.headers.get('x-forwarded-for') || 'unknown';
-    const rateLimitResult = await limiter.check(ip);
-    
-    if (!rateLimitResult.success) {
+    const body = await req.json();
+    const { email, password } = loginSchema.parse(body);
+
+    // Rate limiting for login attempts
+    const ipAddress = req.headers.get('x-forwarded-for') || 'unknown';
+    const rateLimitResult = await rateLimit(ipAddress, 'login', MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION);
+    if (!rateLimitResult.allowed) {
       return NextResponse.json(
         { error: 'Too many login attempts. Please try again later.' },
         { status: 429 }
       );
     }
-
-    const body = await req.json();
-    const { email, password } = loginSchema.parse(body);
 
     // Find user
     const user = await db.user.findUnique({
@@ -41,40 +36,42 @@ export async function POST(req: Request) {
     });
 
     if (!user) {
-      // Use consistent timing to prevent timing attacks
-      await bcrypt.compare(password, '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LcdYShVUoDTYqFpji');
-      
       return NextResponse.json(
         { error: 'Invalid credentials' },
         { status: 401 }
       );
     }
 
-    // Verify account status
-    if (!user.emailVerified) {
-      return NextResponse.json(
-        { error: 'Please verify your email before logging in' },
-        { status: 403 }
-      );
+    // Check if account is locked
+    if (user.failedLoginAttempts >= MAX_FAILED_ATTEMPTS) {
+      const lockoutTime = new Date(user.lastFailedLogin!).getTime() + LOCKOUT_DURATION;
+      if (Date.now() < lockoutTime) {
+        return NextResponse.json(
+          { error: 'Account is temporarily locked. Please try again later.' },
+          { status: 423 }
+        );
+      }
+      // Reset failed attempts if lockout period has passed
+      await db.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0 }
+      });
     }
 
-    if (user.locked) {
-      return NextResponse.json(
-        { error: 'Account is locked. Please contact support.' },
-        { status: 403 }
-      );
-    }
+    // Verify password using timing-safe comparison
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    const isValid = timingSafeEqual(
+      Buffer.from(passwordMatch.toString()),
+      Buffer.from('true')
+    );
 
-    // Verify password
-    const validPassword = await bcrypt.compare(password, user.password);
-
-    if (!validPassword) {
-      // Update failed attempts
+    if (!isValid) {
+      // Increment failed attempts
       await db.user.update({
         where: { id: user.id },
         data: {
-          loginAttempts: user.loginAttempts + 1,
-          locked: user.loginAttempts >= 4 // Lock after 5 failed attempts
+          failedLoginAttempts: (user.failedLoginAttempts || 0) + 1,
+          lastFailedLogin: new Date()
         }
       });
 
@@ -84,22 +81,19 @@ export async function POST(req: Request) {
       );
     }
 
-    // Reset login attempts on successful login
+    // Reset failed attempts on successful login
     await db.user.update({
       where: { id: user.id },
-      data: {
-        loginAttempts: 0,
-        lastLogin: new Date()
-      }
+      data: { failedLoginAttempts: 0 }
     });
 
-    // Generate JWT with secure settings
+    // Generate JWT token
     const token = await signJWT(
       { userId: user.id },
-      { expiresIn: '1h' }
+      { exp: '1h' }
     );
 
-    // Set secure cookie with token
+    // Set secure cookie
     const response = NextResponse.json({
       user: {
         id: user.id,
@@ -124,8 +118,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-
-    console.error('[LOGIN_ERROR]', error);
+    
+    console.error('Login error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
