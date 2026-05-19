@@ -1,12 +1,28 @@
 import { Order } from '@/types/order'
+import { useSession } from 'next-auth/react'
+import { useState } from 'react'
 
 interface OrderDetailsProps {
   order: Order
 }
 
 export default function OrderDetails({ order }: OrderDetailsProps) {
+  const { data: session } = useSession()
+  const [error, setError] = useState('')
+
+  // Add authorization check
+  if (!session || order.userId !== session.user.id) {
+    return <div>Not authorized to view this order</div>
+  }
+
   return (
     <div className="bg-white rounded-lg border p-6">
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+          {error}
+        </div>
+      )}
+      
       <div className="space-y-6">
         <div>
           <h2 className="text-xl font-semibold mb-4">Order Summary</h2>
@@ -25,28 +41,6 @@ export default function OrderDetails({ order }: OrderDetailsProps) {
             </div>
           </div>
         </div>
-
-        <div>
-          <h2 className="text-xl font-semibold mb-4">Shipping Information</h2>
-          <div className="space-y-2 text-gray-600">
-            <p>{order.shippingAddress.name}</p>
-            <p>{order.shippingAddress.street}</p>
-            <p>
-              {order.shippingAddress.city}, {order.shippingAddress.state}{' '}
-              {order.shippingAddress.zipCode}
-            </p>
-            <p>{order.shippingAddress.country}</p>
-          </div>
-        </div>
-
-        {order.trackingNumber && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4">Tracking</h2>
-            <p className="text-gray-600">
-              Tracking Number: {order.trackingNumber}
-            </p>
-          </div>
-        )}
       </div>
     </div>
   )
