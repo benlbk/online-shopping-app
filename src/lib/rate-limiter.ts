@@ -1,37 +1,40 @@
 interface RateLimiterConfig {
   windowMs: number;
   maxRequests: number;
+  trustProxy: boolean;
 }
 
-interface RateLimiterEntry {
+interface RateLimitEntry {
   count: number;
   resetTime: number;
 }
 
 export class RateLimiter {
-  private windowMs: number;
-  private maxRequests: number;
-  private requests: Map<string, RateLimiterEntry>;
+  private limits: Map<string, RateLimitEntry>;
+  private config: RateLimiterConfig;
 
   constructor(config: RateLimiterConfig) {
-    this.windowMs = config.windowMs;
-    this.maxRequests = config.maxRequests;
-    this.requests = new Map();
+    this.limits = new Map();
+    this.config = config;
+    
+    // Cleanup expired entries every minute
+    setInterval(() => this.cleanup(), 60000);
   }
 
-  allowRequest(clientId: string): boolean {
+  checkLimit(clientIp: string): boolean {
     const now = Date.now();
-    const entry = this.requests.get(clientId);
+    const entry = this.limits.get(clientIp);
 
-    if (!entry || now > entry.resetTime) {
-      this.requests.set(clientId, {
+    if (!entry || now >= entry.resetTime) {
+      // New or expired entry
+      this.limits.set(clientIp, {
         count: 1,
-        resetTime: now + this.windowMs
+        resetTime: now + this.config.windowMs
       });
       return true;
     }
 
-    if (entry.count >= this.maxRequests) {
+    if (entry.count >= this.config.maxRequests) {
       return false;
     }
 
@@ -39,12 +42,11 @@ export class RateLimiter {
     return true;
   }
 
-  // Clean up expired entries periodically
-  cleanup(): void {
+  private cleanup() {
     const now = Date.now();
-    for (const [key, entry] of this.requests.entries()) {
-      if (now > entry.resetTime) {
-        this.requests.delete(key);
+    for (const [ip, entry] of this.limits.entries()) {
+      if (now >= entry.resetTime) {
+        this.limits.delete(ip);
       }
     }
   }
