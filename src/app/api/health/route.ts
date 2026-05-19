@@ -1,61 +1,76 @@
 import { NextResponse } from 'next/server';
 import { checkDatabaseConnection } from '@/lib/db';
 import { getUptime } from '@/lib/health';
-import { z } from 'zod';
+import { RateLimiter } from '@/lib/rate-limiter';
 
-// Environment validation schema
-const envSchema = z.object({
-  DATABASE_URL: z.string().min(1),
-  DB_TIMEOUT_MS: z.string().transform(val => parseInt(val, 10)).default('2000'),
-  HEALTH_CHECK_CACHE_SEC: z.string().transform(val => parseInt(val, 10)).default('10')
+const rateLimiter = new RateLimiter({
+  windowMs: 60 * 1000, // 1 minute
+  maxRequests: 10 // 10 requests per minute
 });
 
-// Validate environment variables at startup
-const env = envSchema.parse(process.env);
+const DB_CHECK_TIMEOUT = 2000; // 2 second timeout
+const CACHE_TTL = 10000; // 10 second cache
 
-// Cache health check results
-type HealthCheckCache = {
-  timestamp: number;
-  result: boolean;
+// Cache for database status
+let dbStatusCache = {
+  status: false,
+  lastChecked: 0
 };
 
-let healthCheckCache: HealthCheckCache | null = null;
-
-export async function GET() {
-  const uptime = getUptime();
-  let dbConnected = false;
-
-  try {
-    // Check cache first
-    const now = Date.now();
-    if (healthCheckCache && (now - healthCheckCache.timestamp) < (env.HEALTH_CHECK_CACHE_SEC * 1000)) {
-      dbConnected = healthCheckCache.result;
-    } else {
-      // Perform DB check with timeout
-      const dbCheckPromise = checkDatabaseConnection();
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Database check timeout')), env.DB_TIMEOUT_MS);
-      });
-
-      dbConnected = await Promise.race([dbCheckPromise, timeoutPromise]) as boolean;
-
-      // Update cache
-      healthCheckCache = {
-        timestamp: now,
-        result: dbConnected
-      };
-    }
-  } catch (error) {
-    console.error('Health check error:', error);
-    dbConnected = false;
+export async function GET(request: Request) {
+  // Rate limiting
+  const clientIp = request.headers.get('x-forwarded-for') || 'unknown';
+  if (!rateLimiter.allowRequest(clientIp)) {
+    return NextResponse.json(
+      { error: 'Too many requests' },
+      { status: 429 }
+    );
   }
 
-  const status = dbConnected ? 'healthy' : 'degraded';
+  // Get uptime
+  const uptime = getUptime();
+
+  // Check database with caching
+  let dbConnected = false;
+  const now = Date.now();
+  if (now - dbStatusCache.lastChecked > CACHE_TTL) {
+    try {
+      dbConnected = await Promise.race([
+        checkDatabaseConnection(),
+        new Promise<boolean>((_, reject) => 
+          setTimeout(() => reject(new Error('Database check timeout')), DB_CHECK_TIMEOUT)
+        )
+      ]);
+      dbStatusCache = {
+        status: dbConnected,
+        lastChecked: now
+      };
+    } catch (error) {
+      dbConnected = false;
+      dbStatusCache = {
+        status: false,
+        lastChecked: now
+      };
+    }
+  } else {
+    dbConnected = dbStatusCache.status;
+  }
+
+  const status = dbConnected ? 'healthy' : 'unhealthy';
   const statusCode = dbConnected ? 200 : 503;
 
-  return NextResponse.json({
-    status,
-    uptime_seconds: uptime,
-    database_connected: dbConnected
-  }, { status: statusCode });
+  return NextResponse.json(
+    {
+      status,
+      uptime_seconds: uptime,
+      database_connected: dbConnected
+    },
+    {
+      status: statusCode,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'"
+      }
+    }
+  );
 }
