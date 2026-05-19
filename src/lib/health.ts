@@ -1,11 +1,16 @@
 let startTime: number;
 
-// Initialize start time when module is loaded
-startTime = Date.now();
+export function initializeHealth() {
+  // Persist start time in a way that survives hot reloads
+  if (typeof global.__SERVER_START_TIME === 'undefined') {
+    global.__SERVER_START_TIME = Date.now();
+  }
+  startTime = global.__SERVER_START_TIME;
+}
 
-/**
- * Get the service uptime in seconds
- */
 export function getUptime(): number {
+  if (!startTime) {
+    initializeHealth();
+  }
   return Math.floor((Date.now() - startTime) / 1000);
 }
