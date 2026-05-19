@@ -2,22 +2,29 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { db } from '@/lib/db';
+import { randomBytes } from 'crypto';
 import { sendVerificationEmail } from '@/lib/email';
 
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).regex(/^(?=.*[A-Z])(?=.*[0-9])/),
+  password: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+    .regex(/[0-9]/, 'Password must contain at least one number')
+    .regex(/[^A-Za-z0-9]/, 'Password must contain at least one symbol'),
   name: z.string().min(2)
 });
+
+const VERIFICATION_TOKEN_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const validatedData = registerSchema.parse(body);
+    const { email, password, name } = registerSchema.parse(body);
 
-    // Check if user exists
+    // Check for existing user
     const existingUser = await db.user.findUnique({
-      where: { email: validatedData.email }
+      where: { email: email.toLowerCase() }
     });
 
     if (existingUser) {
@@ -27,36 +34,42 @@ export async function POST(req: Request) {
       );
     }
 
+    // Generate secure verification token
+    const verificationToken = randomBytes(32).toString('hex');
+    const hashedToken = await bcrypt.hash(verificationToken, 10);
+
     // Hash password
-    const hashedPassword = await bcrypt.hash(validatedData.password, 12);
+    const hashedPassword = await bcrypt.hash(password, 12);
 
     // Create user
     const user = await db.user.create({
       data: {
-        email: validatedData.email,
+        email: email.toLowerCase(),
         password: hashedPassword,
-        name: validatedData.name,
-        verificationToken: crypto.randomUUID(),
-        verificationTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        name,
+        verificationToken: hashedToken,
+        verificationTokenExpiry: new Date(Date.now() + VERIFICATION_TOKEN_EXPIRY),
+        status: 'PENDING'
       }
     });
 
     // Send verification email
-    await sendVerificationEmail({
-      email: user.email,
-      token: user.verificationToken,
-      name: user.name
-    });
+    await sendVerificationEmail(email, verificationToken);
 
     return NextResponse.json({
-      message: 'Registration successful. Please verify your email.',
-      userId: user.id
+      userId: user.id,
+      message: 'Registration successful. Please check your email to verify your account.'
     });
 
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 });
+      return NextResponse.json(
+        { error: error.errors[0].message },
+        { status: 400 }
+      );
     }
+
+    console.error('Registration error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
