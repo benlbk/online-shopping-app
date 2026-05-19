@@ -1,53 +1,48 @@
-interface RateLimiterConfig {
-  windowMs: number;
-  maxRequests: number;
-  trustProxy: boolean;
-}
+import Redis from 'ioredis';
 
-interface RateLimitEntry {
-  count: number;
-  resetTime: number;
+interface RateLimiterOptions {
+  windowMs: number;
+  max: number;
 }
 
 export class RateLimiter {
-  private limits: Map<string, RateLimitEntry>;
-  private config: RateLimiterConfig;
+  private redis: Redis;
+  private options: RateLimiterOptions;
 
-  constructor(config: RateLimiterConfig) {
-    this.limits = new Map();
-    this.config = config;
-    
-    // Cleanup expired entries every minute
-    setInterval(() => this.cleanup(), 60000);
+  constructor(options: RateLimiterOptions) {
+    this.options = options;
+    this.redis = new Redis(process.env.REDIS_URL);
   }
 
-  checkLimit(clientIp: string): boolean {
+  async check(ip: string): Promise<{allowed: boolean, remaining: number}> {
+    const key = `ratelimit:${ip}`;
     const now = Date.now();
-    const entry = this.limits.get(clientIp);
+    const windowStart = now - this.options.windowMs;
 
-    if (!entry || now >= entry.resetTime) {
-      // New or expired entry
-      this.limits.set(clientIp, {
-        count: 1,
-        resetTime: now + this.config.windowMs
-      });
-      return true;
-    }
+    try {
+      // Clean old requests
+      await this.redis.zremrangebyscore(key, 0, windowStart);
 
-    if (entry.count >= this.config.maxRequests) {
-      return false;
-    }
+      // Count requests in current window
+      const requestCount = await this.redis.zcard(key);
 
-    entry.count++;
-    return true;
-  }
-
-  private cleanup() {
-    const now = Date.now();
-    for (const [ip, entry] of this.limits.entries()) {
-      if (now >= entry.resetTime) {
-        this.limits.delete(ip);
+      if (requestCount >= this.options.max) {
+        return { allowed: false, remaining: 0 };
       }
+
+      // Add new request
+      await this.redis.zadd(key, now, now.toString());
+      await this.redis.expire(key, Math.ceil(this.options.windowMs / 1000));
+
+      return {
+        allowed: true,
+        remaining: this.options.max - requestCount - 1
+      };
+
+    } catch (error) {
+      console.error('Rate limiter error:', error.message);
+      // Fail open if Redis is down
+      return { allowed: true, remaining: 1 };
     }
   }
 }
