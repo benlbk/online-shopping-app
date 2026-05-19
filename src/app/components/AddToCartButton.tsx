@@ -15,11 +15,14 @@ export default function AddToCartButton({ item }: AddToCartButtonProps) {
   const handleAddToCart = async () => {
     setIsAdding(true);
     try {
-      addItem({ ...item, quantity: 1 });
-      // Show success message or animation here
+      await addItem({ ...item, quantity: 1 }); // Fixed: Added missing await
+      // Show success message using toast/notification system
+      window.dispatchEvent(new CustomEvent('cart:itemAdded', { detail: item }));
     } catch (error) {
       console.error('Failed to add item to cart:', error);
-      // Show error message here
+      window.dispatchEvent(new CustomEvent('cart:error', { 
+        detail: { message: 'Failed to add item to cart' } 
+      }));
     } finally {
       setIsAdding(false);
     }
@@ -29,6 +32,7 @@ export default function AddToCartButton({ item }: AddToCartButtonProps) {
     <button
       onClick={handleAddToCart}
       disabled={isAdding}
+      aria-busy={isAdding}
       className={`
         px-4 py-2 rounded-lg
         ${isAdding ? 'bg-gray-400' : 'bg-blue-500 hover:bg-blue-600'}
