@@ -1,58 +1,51 @@
 # Health Check Implementation Tasks
 
-## 1. Setup (S)
-- [ ] Create HealthController class/module
-- [ ] Add /health route configuration
-- [ ] Define response DTOs
+## 1. Setup Health Check Infrastructure (S)
+- Create HealthController class
+- Add /health route configuration
+- Create basic endpoint structure
+Completion: Route returns 200 OK
 
-Completion Criteria:
-- Route responds with 200 and empty JSON
+## 2. Implement Uptime Tracking (S)
+- Add service start time tracking
+- Create uptime calculation logic
+- Add to health response
+Completion: Uptime correctly reported in seconds
 
-## 2. Uptime Tracking (S)
-- [ ] Implement uptime counter
-- [ ] Add uptime to response
-- [ ] Add unit tests
+## 3. Database Health Check (M)
+- Implement database connection testing
+- Add timeout handling
+- Implement status caching
+- Add to health response
+Completion: Database status correctly reported
 
-Completion Criteria:
-- Uptime reported accurately
-- Tests passing
+## 4. Health Response DTOs (S)
+- Create response models
+- Implement JSON serialization
+- Add status mapping logic
+Completion: Endpoint returns correct JSON structure
 
-## 3. Database Monitoring (M)
-- [ ] Implement DB connectivity check
-- [ ] Add caching layer
-- [ ] Add timeout handling
-- [ ] Update response format
+## 5. Error Handling (S)
+- Add error cases for database failures
+- Implement 503 response
+- Add error logging
+Completion: Errors handled gracefully
 
-Completion Criteria:
-- DB status correctly reported
-- Cache working as expected
-- Timeouts handled gracefully
+## 6. Testing (M)
+- Unit tests for health service
+- Integration tests for database checker
+- API tests for endpoint
+- Load tests for performance
+Completion: All tests passing
 
-## 4. Integration (S)
-- [ ] Add error handling
-- [ ] Implement 503 response
-- [ ] Add integration tests
+## 7. Documentation (S)
+- Add API documentation
+- Update service readme
+- Add monitoring integration examples
+Completion: Documentation complete and accurate
 
-Completion Criteria:
-- All error cases handled
-- Integration tests passing
-
-## 5. Documentation & Monitoring (S)
-- [ ] Add API documentation
-- [ ] Add logging
-- [ ] Create monitoring dashboard
-
-Completion Criteria:
-- Documentation complete
-- Logs structured correctly
-- Dashboard operational
-
-## 6. Load Testing (M)
-- [ ] Performance testing
-- [ ] Load balancer verification
-- [ ] Rate limit testing
-
-Completion Criteria:
-- Meets performance requirements
-- Works with load balancer
-- Rate limiting effective
+## 8. Performance Optimization (S)
+- Implement rate limiting
+- Tune cache settings
+- Verify response times
+Completion: Meets performance requirements
