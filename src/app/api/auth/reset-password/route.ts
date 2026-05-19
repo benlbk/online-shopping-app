@@ -1,97 +1,68 @@
 import { NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { sendPasswordResetEmail } from '@/lib/email';
+import { rateLimit } from '@/lib/rate-limit';
+import { randomBytes } from 'crypto';
+import { sendResetEmail } from '@/lib/email';
 
-const requestResetSchema = z.object({
+const resetSchema = z.object({
   email: z.string().email()
 });
 
-const resetPasswordSchema = z.object({
-  token: z.string(),
-  password: z.string().min(8).regex(/^(?=.*[A-Z])(?=.*[0-9])/)
-});
+const RESET_TOKEN_EXPIRY = 60 * 60 * 1000; // 1 hour
+const RESET_RATE_LIMIT = 3; // 3 attempts per 24h
+const RESET_RATE_WINDOW = 24 * 60 * 60 * 1000; // 24 hours
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const validatedData = requestResetSchema.parse(body);
+    const { email } = resetSchema.parse(body);
 
-    const user = await db.user.findUnique({
-      where: { email: validatedData.email }
-    });
+    // Rate limiting for password reset requests
+    const ipAddress = req.headers.get('x-forwarded-for') || 'unknown';
+    const rateLimitResult = await rateLimit(
+      ipAddress,
+      'password-reset',
+      RESET_RATE_LIMIT,
+      RESET_RATE_WINDOW
+    );
 
-    if (user) {
-      const resetToken = crypto.randomUUID();
-      await db.user.update({
-        where: { id: user.id },
-        data: {
-          resetToken,
-          resetTokenExpiry: new Date(Date.now() + 60 * 60 * 1000)
-        }
-      });
-
-      await sendPasswordResetEmail({
-        email: user.email,
-        token: resetToken,
-        name: user.name
-      });
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json(
+        { error: 'Too many reset attempts. Please try again later.' },
+        { status: 429 }
+      );
     }
 
+    // Generate secure reset token
+    const resetToken = randomBytes(32).toString('hex');
+    const hashedToken = await bcrypt.hash(resetToken, 10);
+
+    // Store reset token with expiry
+    await db.user.update({
+      where: { email: email.toLowerCase() },
+      data: {
+        resetToken: hashedToken,
+        resetTokenExpiry: new Date(Date.now() + RESET_TOKEN_EXPIRY)
+      }
+    });
+
+    // Send reset email
+    await sendResetEmail(email, resetToken);
+
     return NextResponse.json({
-      message: 'If an account exists, a password reset email has been sent'
+      message: 'If an account exists with this email, a password reset link will be sent.'
     });
 
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 });
-    }
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function PUT(req: Request) {
-  try {
-    const body = await req.json();
-    const validatedData = resetPasswordSchema.parse(body);
-
-    const user = await db.user.findFirst({
-      where: {
-        resetToken: validatedData.token,
-        resetTokenExpiry: { gt: new Date() }
-      }
-    });
-
-    if (!user) {
       return NextResponse.json(
-        { error: 'Invalid or expired reset token' },
+        { error: 'Invalid email address' },
         { status: 400 }
       );
     }
 
-    const hashedPassword = await bcrypt.hash(validatedData.password, 12);
-
-    await db.user.update({
-      where: { id: user.id },
-      data: {
-        password: hashedPassword,
-        resetToken: null,
-        resetTokenExpiry: null
-      }
-    });
-
-    return NextResponse.json({
-      message: 'Password reset successful'
-    });
-
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.errors }, { status: 400 });
-    }
+    console.error('Password reset error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
