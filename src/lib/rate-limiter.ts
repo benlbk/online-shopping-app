@@ -3,49 +3,48 @@ interface RateLimiterConfig {
   maxRequests: number;
 }
 
-interface RateLimit {
-  timestamp: number;
+interface RateLimiterEntry {
   count: number;
+  resetTime: number;
 }
 
 export class RateLimiter {
-  private limits: Map<string, RateLimit>;
-  private readonly config: RateLimiterConfig;
+  private windowMs: number;
+  private maxRequests: number;
+  private requests: Map<string, RateLimiterEntry>;
 
   constructor(config: RateLimiterConfig) {
-    this.limits = new Map();
-    this.config = config;
+    this.windowMs = config.windowMs;
+    this.maxRequests = config.maxRequests;
+    this.requests = new Map();
   }
 
-  checkRate(key: string): boolean {
+  allowRequest(clientId: string): boolean {
     const now = Date.now();
-    const limit = this.limits.get(key);
+    const entry = this.requests.get(clientId);
 
-    if (!limit) {
-      this.limits.set(key, { timestamp: now, count: 1 });
+    if (!entry || now > entry.resetTime) {
+      this.requests.set(clientId, {
+        count: 1,
+        resetTime: now + this.windowMs
+      });
       return true;
     }
 
-    if (now - limit.timestamp > this.config.windowMs) {
-      // Reset window
-      this.limits.set(key, { timestamp: now, count: 1 });
-      return true;
-    }
-
-    if (limit.count >= this.config.maxRequests) {
+    if (entry.count >= this.maxRequests) {
       return false;
     }
 
-    limit.count++;
+    entry.count++;
     return true;
   }
 
-  // Cleanup old entries periodically
+  // Clean up expired entries periodically
   cleanup(): void {
     const now = Date.now();
-    for (const [key, limit] of this.limits.entries()) {
-      if (now - limit.timestamp > this.config.windowMs) {
-        this.limits.delete(key);
+    for (const [key, entry] of this.requests.entries()) {
+      if (now > entry.resetTime) {
+        this.requests.delete(key);
       }
     }
   }
