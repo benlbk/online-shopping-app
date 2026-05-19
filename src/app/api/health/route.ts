@@ -1,49 +1,81 @@
 import { NextResponse } from 'next/server';
 import { checkDatabaseConnection } from '@/lib/db';
 import { getUptime } from '@/lib/health';
-import { cache } from '@/lib/cache';
+import { RateLimiter } from '@/lib/rate-limiter';
 
-const CACHE_KEY = 'health_status';
-const CACHE_TTL = 10; // seconds
+const rateLimiter = new RateLimiter({
+  windowMs: 60 * 1000, // 1 minute
+  maxRequests: 10 // 10 requests per minute
+});
 
-export async function GET() {
+const DB_CHECK_TIMEOUT = 2000; // 2 seconds
+const CACHE_TTL = 10000; // 10 seconds
+
+let lastCheckTime = 0;
+let cachedDbStatus = false;
+
+async function checkDatabaseWithTimeout(): Promise<boolean> {
+  const now = Date.now();
+  
+  // Return cached result if within TTL
+  if (now - lastCheckTime < CACHE_TTL) {
+    return cachedDbStatus;
+  }
+
   try {
-    // Try to get cached health status
-    const cachedStatus = await cache.get(CACHE_KEY);
-    if (cachedStatus) {
-      return NextResponse.json(cachedStatus.data, {
-        status: cachedStatus.data.status === 'healthy' ? 200 : 503
-      });
-    }
-
-    const uptime = getUptime();
-    const dbConnected = await Promise.race([
-      checkDatabaseConnection(),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Database timeout')), 2000)
-      )
-    ]);
-
-    const healthStatus = {
-      status: dbConnected ? 'healthy' : 'degraded',
-      uptime_seconds: uptime,
-      database_connected: dbConnected
-    };
-
-    // Cache the result
-    await cache.set(CACHE_KEY, healthStatus, CACHE_TTL);
-
-    return NextResponse.json(healthStatus, {
-      status: dbConnected ? 200 : 503
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Database check timeout')), DB_CHECK_TIMEOUT);
     });
 
+    const dbCheckPromise = checkDatabaseConnection();
+    const result = await Promise.race([dbCheckPromise, timeoutPromise]);
+    
+    // Update cache
+    lastCheckTime = now;
+    cachedDbStatus = Boolean(result);
+    
+    return cachedDbStatus;
   } catch (error) {
-    const errorStatus = {
-      status: 'unhealthy',
-      uptime_seconds: getUptime(),
-      database_connected: false
-    };
+    console.error('Database health check failed:', error);
+    return false;
+  }
+}
 
-    return NextResponse.json(errorStatus, { status: 503 });
+export async function GET(request: Request) {
+  // Rate limiting check
+  const clientIp = request.headers.get('x-forwarded-for') || 'unknown';
+  if (!rateLimiter.checkRate(clientIp)) {
+    return NextResponse.json(
+      { error: 'Too many requests' },
+      { status: 429 }
+    );
+  }
+
+  try {
+    const [dbConnected, uptimeSeconds] = await Promise.all([
+      checkDatabaseWithTimeout(),
+      getUptime()
+    ]);
+
+    const status = dbConnected ? 'healthy' : 'degraded';
+    const statusCode = dbConnected ? 200 : 503;
+
+    return NextResponse.json({
+      status,
+      uptime_seconds: uptimeSeconds,
+      database_connected: dbConnected
+    }, {
+      status: statusCode
+    });
+  } catch (error) {
+    console.error('Health check failed:', error);
+    return NextResponse.json({
+      status: 'unhealthy',
+      uptime_seconds: await getUptime(),
+      database_connected: false,
+      error: 'Internal service error'
+    }, {
+      status: 503
+    });
   }
 }
