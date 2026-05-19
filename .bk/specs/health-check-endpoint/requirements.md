@@ -12,27 +12,28 @@ Acceptance Criteria:
 - Returns 200 OK when service is healthy
 - Returns JSON response with service status
 - Includes uptime in seconds
-- Shows database connection status
+- Shows database connectivity status
 
-### 2. Load Balancer Integration
+### 2. Service Dependency Status
 As a system administrator,
-I want the health check to indicate true service availability
-So that load balancers can properly route traffic
+I want to know if the service's database connection is working
+So that I can quickly identify the root cause of issues
 
 Acceptance Criteria:
-- Returns 503 Service Unavailable if database is not connected
-- Response time under 500ms
-- No authentication required
+- Health check verifies database connectivity
+- Returns database_connected: true/false
+- Returns 503 Service Unavailable if database is down
 
 ## Constraints
 
-- Must be lightweight and not impact service performance
-- Must not expose sensitive information
-- Must be compatible with common monitoring tools
+- Must be lightweight and respond quickly (<500ms)
+- Must not expose sensitive system information
+- Must be accessible without authentication
+- Must not impact service performance
 
 ## Success Criteria
 
-- Health check can be used by AWS ELB/ALB
-- Monitoring systems can parse the JSON response
-- DevOps can set up automated alerts based on endpoint
-- Zero impact on shopping cart service performance
+- Health check can be integrated with monitoring systems
+- Provides accurate service status information
+- Can detect database connectivity issues
+- Minimal performance overhead
