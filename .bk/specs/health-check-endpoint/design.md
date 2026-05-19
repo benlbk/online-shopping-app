@@ -1,53 +1,63 @@
-# Health Check Endpoint Technical Design
+# Health Check Endpoint Design
 
-## Architecture
+## System Architecture
 
-### Component Overview
+### Components
 - Health Controller - Handles HTTP requests
-- Health Service - Collects health metrics
-- Database Monitor - Checks DB connectivity
-- Metrics Collector - Tracks uptime
+- Health Service - Aggregates health data
+- Database Health Checker - Validates database connectivity
+- Uptime Tracker - Tracks service uptime
 
 ### Data Flow
-1. Request hits /health endpoint
-2. Health Controller invokes Health Service
-3. Health Service aggregates metrics from:
-   - Database Monitor
-   - Metrics Collector
-4. Response returned to client
+1. Client requests GET /health
+2. Health Controller receives request
+3. Health Service collects status data
+4. Database Health Checker performs connection test
+5. Response assembled and returned
 
-### Response Format
-```json
+## API Contract
+
+```
+GET /health
+
+Responses:
+200 OK
 {
   "status": "healthy",
-  "uptime_seconds": 3600,
-  "database_connected": true
+  "uptime_seconds": number,
+  "database_connected": boolean
+}
+
+503 Service Unavailable
+{
+  "status": "unhealthy",
+  "uptime_seconds": number,
+  "database_connected": false
 }
 ```
 
 ## Technical Decisions
 
-### Technology Choices
-- Use existing web framework's health check modules if available
-- Implement simple DB ping for database check
-- Use atomic counter for uptime tracking
+### Database Health Check
+- Use connection pool ping/test query
+- Implement with timeout (max 2 seconds)
+- Cache result for 30 seconds to prevent excess load
 
-### Performance Considerations
-- Cache DB status for 5 seconds to prevent excess load
-- Use non-blocking DB connectivity check
-- Keep response payload minimal
+### Uptime Tracking
+- Store service start time in memory
+- Calculate uptime on each request
 
-### Security
-- No authentication to allow load balancer access
-- No sensitive data in response
-- Rate limiting recommended
+## Error Handling
+- Timeout for database checks
+- Graceful handling of unexpected errors
+- Logging of health check failures
 
-### Error Handling
-- Timeout DB check after 2 seconds
-- Return 503 for DB failures
-- Log all check failures
+## Security Considerations
+- No authentication required
+- Rate limiting to prevent DoS
+- No sensitive information exposure
 
-## Monitoring Integration
-- Compatible with Prometheus metrics
-- Supports AWS health checks
-- Structured logging for aggregation
+## Performance
+- Caching of database status
+- Lightweight checks
+- Minimal processing overhead
