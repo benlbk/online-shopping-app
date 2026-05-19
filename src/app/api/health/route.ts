@@ -1,45 +1,55 @@
 import { NextResponse } from 'next/server';
-import { getDbConnection } from '@/lib/db';
+import { headers } from 'next/headers';
+import { checkDatabaseConnection } from '@/lib/db';
+import { getUptime } from '@/lib/health';
+import { RateLimiter } from '@/lib/rate-limiter';
 
-const startTime = Date.now();
-let lastDbCheck = 0;
-let lastDbStatus = false;
-const DB_CHECK_INTERVAL = 30000; // 30 seconds
-
-async function checkDatabase(): Promise<boolean> {
-  try {
-    const db = await getDbConnection();
-    await db.query('SELECT 1');
-    return true;
-  } catch (error) {
-    console.error('Database health check failed:', error);
-    return false;
-  }
-}
+const rateLimiter = new RateLimiter({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10 // limit each IP to 10 requests per windowMs
+});
 
 export async function GET() {
-  // Check if we need to refresh database status
-  const now = Date.now();
-  if (now - lastDbCheck > DB_CHECK_INTERVAL) {
-    lastDbStatus = await checkDatabase();
-    lastDbCheck = now;
-  }
-
-  const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
-  
-  const healthStatus = {
-    status: lastDbStatus ? 'healthy' : 'unhealthy',
-    uptime_seconds: uptimeSeconds,
-    database_connected: lastDbStatus
-  };
-
-  return NextResponse.json(
-    healthStatus,
-    { 
-      status: lastDbStatus ? 200 : 503,
-      headers: {
-        'Cache-Control': 'no-store'
-      }
+  try {
+    // Apply rate limiting
+    const headersList = headers();
+    const ip = headersList.get('x-forwarded-for') || 'unknown';
+    const rateLimitResult = await rateLimiter.check(ip);
+    
+    if (!rateLimitResult.success) {
+      return NextResponse.json(
+        { error: 'Too many requests' },
+        { status: 429 }
+      );
     }
-  );
+
+    // Check database connection
+    const dbConnected = await checkDatabaseConnection();
+    
+    // Get service uptime
+    const uptimeSeconds = getUptime();
+
+    // Prepare response
+    const healthStatus = {
+      status: dbConnected ? 'healthy' : 'degraded',
+      uptime_seconds: uptimeSeconds,
+      database_connected: dbConnected
+    };
+
+    return NextResponse.json(
+      healthStatus,
+      { status: dbConnected ? 200 : 503 }
+    );
+
+  } catch (error) {
+    console.error('Health check failed:', error);
+    return NextResponse.json(
+      {
+        status: 'error',
+        uptime_seconds: getUptime(),
+        database_connected: false
+      },
+      { status: 503 }
+    );
+  }
 }
