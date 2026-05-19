@@ -4,54 +4,50 @@
 
 ### Component Overview
 - Health Controller - Handles HTTP requests
-- Health Service - Aggregates health data
-- Database Monitor - Checks database connectivity
-- Uptime Tracker - Tracks service uptime
+- Health Service - Collects health metrics
+- Database Monitor - Checks DB connectivity
+- Metrics Collector - Tracks uptime
 
 ### Data Flow
-1. Load balancer/monitoring tool calls GET /health
-2. Health Controller receives request
-3. Health Service aggregates status data
-4. Response returned to caller
+1. Request hits /health endpoint
+2. Health Controller invokes Health Service
+3. Health Service aggregates metrics from:
+   - Database Monitor
+   - Metrics Collector
+4. Response returned to client
 
 ### Response Format
 ```json
 {
-  "status": "UP",
+  "status": "healthy",
   "uptime_seconds": 3600,
-  "database_connected": true,
-  "timestamp": "2023-12-01T12:00:00Z"
+  "database_connected": true
 }
 ```
 
 ## Technical Decisions
 
-### Database Health Check
-- Use connection pool ping
-- Timeout after 2 seconds
-- Cache result for 5 seconds to prevent database load
+### Technology Choices
+- Use existing web framework's health check modules if available
+- Implement simple DB ping for database check
+- Use atomic counter for uptime tracking
 
-### Uptime Tracking
-- Store service start time in memory
-- Calculate uptime on each request
-- Reset on service restart
+### Performance Considerations
+- Cache DB status for 5 seconds to prevent excess load
+- Use non-blocking DB connectivity check
+- Keep response payload minimal
+
+### Security
+- No authentication to allow load balancer access
+- No sensitive data in response
+- Rate limiting recommended
 
 ### Error Handling
-- Database timeout returns 503
-- Internal errors return 500
-- Invalid requests return 400
+- Timeout DB check after 2 seconds
+- Return 503 for DB failures
+- Log all check failures
 
-## Security Considerations
-- No authentication required
-- Rate limiting recommended
-- No sensitive data in response
-
-## Scalability
-- Cache health check results
-- Minimize database calls
-- Use non-blocking I/O
-
-## Monitoring
-- Log health check failures
-- Track response times
-- Alert on repeated failures
+## Monitoring Integration
+- Compatible with Prometheus metrics
+- Supports AWS health checks
+- Structured logging for aggregation
