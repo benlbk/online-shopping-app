@@ -1,90 +1,121 @@
-'use client';
-
 import { useState, useEffect } from 'react';
-import { Cart, CartItem } from '../types/cart';
+import { CartItem } from '../types/cart';
 
-const CART_STORAGE_KEY = 'shopping-cart';
-const TAX_RATE = 0.1; // 10% tax rate
+const STORAGE_KEY = 'shopping-cart';
+const TAX_RATES: Record<string, number> = {
+  'US': 0.0725,
+  'CA': 0.13,
+  'UK': 0.20
+};
 
 export function useCart() {
-  const [cart, setCart] = useState<Cart>(() => {
-    if (typeof window !== 'undefined') {
-      const savedCart = localStorage.getItem(CART_STORAGE_KEY);
-      return savedCart ? JSON.parse(savedCart) : { items: [], subtotal: 0, tax: 0, total: 0 };
-    }
-    return { items: [], subtotal: 0, tax: 0, total: 0 };
-  });
+  const [items, setItems] = useState<CartItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
+  // Load cart data on mount
   useEffect(() => {
-    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
-  }, [cart]);
-
-  const calculateTotals = (items: CartItem[]) => {
-    const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const tax = subtotal * TAX_RATE;
-    const total = subtotal + tax;
-    return { subtotal, tax, total };
-  };
-
-  const addItem = (newItem: CartItem) => {
-    setCart(prevCart => {
-      const existingItem = prevCart.items.find(item => item.id === newItem.id);
-      let updatedItems;
-
-      if (existingItem) {
-        updatedItems = prevCart.items.map(item =>
-          item.id === newItem.id
-            ? { ...item, quantity: item.quantity + newItem.quantity }
-            : item
-        );
-      } else {
-        updatedItems = [...prevCart.items, newItem];
+    const loadCart = async () => {
+      try {
+        const savedCart = localStorage.getItem(STORAGE_KEY);
+        if (savedCart) {
+          setItems(JSON.parse(savedCart));
+        }
+      } catch (error) {
+        console.error('Failed to load cart:', error);
+      } finally {
+        setLoading(false);
       }
+    };
+    loadCart();
+  }, []);
 
-      return {
-        ...prevCart,
-        items: updatedItems,
-        ...calculateTotals(updatedItems)
-      };
+  // Save cart changes to storage with debounce
+  useEffect(() => {
+    if (!loading) {
+      const timeoutId = setTimeout(() => {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      }, 500);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [items, loading]);
+
+  const addItem = async (item: CartItem): Promise<void> => {
+    const response = await fetch('/api/cart/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item)
     });
-  };
-
-  const updateQuantity = (itemId: string, quantity: number) => {
-    if (quantity < 0) return;
     
-    setCart(prevCart => {
-      const updatedItems = prevCart.items.map(item =>
+    if (!response.ok) {
+      throw new Error('Failed to add item to cart');
+    }
+
+    setItems(current => {
+      const existingItem = current.find(i => i.id === item.id);
+      if (existingItem) {
+        return current.map(i => 
+          i.id === item.id 
+            ? { ...i, quantity: i.quantity + item.quantity }
+            : i
+        );
+      }
+      return [...current, item];
+    });
+  };
+
+  const updateQuantity = async (itemId: string, quantity: number): Promise<void> => {
+    if (quantity < 0) return;
+
+    const response = await fetch(`/api/cart/items/${itemId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantity })
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update item quantity');
+    }
+
+    setItems(current =>
+      current.map(item =>
         item.id === itemId ? { ...item, quantity } : item
-      );
-
-      return {
-        ...prevCart,
-        items: updatedItems,
-        ...calculateTotals(updatedItems)
-      };
-    });
+      )
+    );
   };
 
-  const removeItem = (itemId: string) => {
-    setCart(prevCart => {
-      const updatedItems = prevCart.items.filter(item => item.id !== itemId);
-      return {
-        ...prevCart,
-        items: updatedItems,
-        ...calculateTotals(updatedItems)
-      };
+  const removeItem = async (itemId: string): Promise<void> => {
+    const response = await fetch(`/api/cart/items/${itemId}`, {
+      method: 'DELETE'
     });
+
+    if (!response.ok) {
+      throw new Error('Failed to remove item from cart');
+    }
+
+    setItems(current => current.filter(item => item.id !== itemId));
   };
 
-  const clearCart = () => {
-    setCart({ items: [], subtotal: 0, tax: 0, total: 0 });
+  const calculateTotal = (countryCode: string = 'US'): {
+    subtotal: number;
+    tax: number;
+    total: number;
+  } => {
+    const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const taxRate = TAX_RATES[countryCode] ?? TAX_RATES['US'];
+    const tax = subtotal * taxRate;
+    return {
+      subtotal,
+      tax,
+      total: subtotal + tax
+    };
   };
 
   return {
-    cart,
+    items,
+    loading,
     addItem,
     updateQuantity,
     removeItem,
-    clearCart
+    calculateTotal
   };
 }
