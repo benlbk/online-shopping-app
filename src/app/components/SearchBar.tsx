@@ -1,64 +1,79 @@
-import { useCallback, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import debounce from 'lodash/debounce';
+"use client";
 
-export type SearchBarProps = {
-  placeholder?: string;
-  className?: string;
-};
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { useDebounce } from '@/hooks/useDebounce';
+import { SearchIcon, XIcon } from '@heroicons/react/outline';
+import { useSearchProducts } from '@/hooks/useSearchProducts';
 
-'use client';
+export default function SearchBar() {
+  const [query, setQuery] = useState('');
+  const [isFocused, setIsFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const debouncedQuery = useDebounce(query, 300);
 
-export default function SearchBar({ placeholder = 'Search products...', className = '' }: SearchBarProps) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
+  const { data, isLoading } = useSearchProducts(debouncedQuery);
 
-  const debouncedSearch = useCallback(
-    debounce((term: string) => {
-      const params = new URLSearchParams(searchParams);
-      if (term) {
-        params.set('q', term);
-      } else {
-        params.delete('q');
-      }
-      router.push(`${pathname}?${params.toString()}`);
-    }, 300),
-    [pathname, router, searchParams]
-  );
-
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const term = e.target.value;
-    setSearchTerm(term);
-    debouncedSearch(term);
-  };
+  const handleClear = useCallback(() => {
+    setQuery('');
+    inputRef.current?.focus();
+  }, []);
 
   return (
-    <div className={`relative ${className}`}>
-      <input
-        type="search"
-        value={searchTerm}
-        onChange={handleSearch}
-        placeholder={placeholder}
-        className="w-full px-4 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-        aria-label="Search products"
-      />
-      <span className="absolute inset-y-0 right-0 flex items-center pr-3">
-        <svg
-          className="w-5 h-5 text-gray-400"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-          />
-        </svg>
-      </span>
+    <div className="relative max-w-xl w-full">
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setTimeout(() => setIsFocused(false), 200)}
+          placeholder="Search products..."
+          className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
+        <SearchIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+        {query && (
+          <button
+            onClick={handleClear}
+            className="absolute right-3 top-1/2 transform -translate-y-1/2"
+          >
+            <XIcon className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+          </button>
+        )}
+      </div>
+
+      {isFocused && query.length >= 3 && (
+        <div className="absolute z-50 w-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200">
+          {isLoading ? (
+            <div className="p-4 text-center text-gray-500">Loading...</div>
+          ) : data?.results.length ? (
+            <ul className="max-h-96 overflow-auto">
+              {data.results.map((product) => (
+                <li
+                  key={product.id}
+                  className="p-4 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
+                >
+                  <div className="flex items-center gap-4">
+                    <img
+                      src={product.image}
+                      alt={product.name}
+                      className="w-16 h-16 object-cover rounded"
+                    />
+                    <div>
+                      <h3 className="font-medium">{product.name}</h3>
+                      <p className="text-gray-600">${product.price}</p>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="p-4 text-center text-gray-500">
+              No products found
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
