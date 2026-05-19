@@ -16,13 +16,13 @@ Acceptance Criteria:
 
 ### 2. Load Balancer Integration
 As a system administrator,
-I want to integrate the health check with load balancers
-So that unhealthy instances can be automatically removed from rotation
+I want the health check to indicate true service availability
+So that load balancers can properly route traffic
 
 Acceptance Criteria:
-- Returns 503 Service Unavailable when database is unreachable
+- Returns 503 Service Unavailable if database is not connected
 - Response time under 500ms
-- No authentication required for health check endpoint
+- No authentication required
 
 ## Constraints
 
@@ -32,7 +32,7 @@ Acceptance Criteria:
 
 ## Success Criteria
 
-- Health check can detect database connectivity issues
-- Endpoint provides accurate uptime information
-- Response format follows standard health check patterns
-- Can handle high frequency polling (every 5 seconds)
+- Health check can be used by AWS ELB/ALB
+- Monitoring systems can parse the JSON response
+- DevOps can set up automated alerts based on endpoint
+- Zero impact on shopping cart service performance
