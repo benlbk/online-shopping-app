@@ -1,39 +1,35 @@
 import { Pool } from 'pg';
-import { z } from 'zod';
 
-// Environment validation
-const envSchema = z.object({
-  DATABASE_URL: z.string().min(1),
-  DB_MAX_CONNECTIONS: z.string().transform(val => parseInt(val, 10)).default('1'),
-  DB_IDLE_TIMEOUT_MS: z.string().transform(val => parseInt(val, 10)).default('10000')
-});
+let pool: Pool | null = null;
 
-const env = envSchema.parse(process.env);
-
-// Configure pool for serverless environment
-const pool = new Pool({
-  connectionString: env.DATABASE_URL,
-  max: env.DB_MAX_CONNECTIONS,
-  idleTimeoutMillis: env.DB_IDLE_TIMEOUT_MS,
-  connectionTimeoutMillis: 2000
-});
+export function getDbPool(): Pool {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: true,
+        ca: process.env.DB_CA_CERT
+      },
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    });
+  }
+  return pool;
+}
 
 export async function checkDatabaseConnection(): Promise<boolean> {
-  let client;
   try {
-    client = await pool.connect();
-    await client.query('SELECT 1');
-    return true;
+    const pool = getDbPool();
+    const client = await pool.connect();
+    try {
+      await client.query('SELECT 1');
+      return true;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error('Database connection check failed:', error);
     return false;
-  } finally {
-    if (client) {
-      client.release();
-    }
   }
-}
-
-export async function getDbConnection() {
-  return await pool.connect();
 }
