@@ -1,76 +1,51 @@
-interface RateLimiterOptions {
-  windowMs: number; // The time window in milliseconds
-  max: number; // Max number of requests within the time window
+interface RateLimiterConfig {
+  windowMs: number;
+  maxRequests: number;
 }
 
-interface RateLimitResult {
-  success: boolean;
-  remainingRequests: number;
-}
-
-interface RequestRecord {
+interface RateLimit {
+  timestamp: number;
   count: number;
-  resetTime: number;
 }
 
 export class RateLimiter {
-  private options: RateLimiterOptions;
-  private requests: Map<string, RequestRecord>;
+  private limits: Map<string, RateLimit>;
+  private readonly config: RateLimiterConfig;
 
-  constructor(options: RateLimiterOptions) {
-    this.options = options;
-    this.requests = new Map();
+  constructor(config: RateLimiterConfig) {
+    this.limits = new Map();
+    this.config = config;
   }
 
-  async check(ip: string): Promise<RateLimitResult> {
+  checkRate(key: string): boolean {
     const now = Date.now();
-    const record = this.requests.get(ip);
+    const limit = this.limits.get(key);
 
-    // Clean up expired records
-    this.cleanup();
-
-    if (!record) {
-      // First request from this IP
-      this.requests.set(ip, {
-        count: 1,
-        resetTime: now + this.options.windowMs
-      });
-      return {
-        success: true,
-        remainingRequests: this.options.max - 1
-      };
+    if (!limit) {
+      this.limits.set(key, { timestamp: now, count: 1 });
+      return true;
     }
 
-    if (now > record.resetTime) {
-      // Window expired, reset counter
-      record.count = 1;
-      record.resetTime = now + this.options.windowMs;
-      return {
-        success: true,
-        remainingRequests: this.options.max - 1
-      };
+    if (now - limit.timestamp > this.config.windowMs) {
+      // Reset window
+      this.limits.set(key, { timestamp: now, count: 1 });
+      return true;
     }
 
-    if (record.count >= this.options.max) {
-      return {
-        success: false,
-        remainingRequests: 0
-      };
+    if (limit.count >= this.config.maxRequests) {
+      return false;
     }
 
-    // Increment counter
-    record.count++;
-    return {
-      success: true,
-      remainingRequests: this.options.max - record.count
-    };
+    limit.count++;
+    return true;
   }
 
-  private cleanup(): void {
+  // Cleanup old entries periodically
+  cleanup(): void {
     const now = Date.now();
-    for (const [ip, record] of this.requests.entries()) {
-      if (now > record.resetTime) {
-        this.requests.delete(ip);
+    for (const [key, limit] of this.limits.entries()) {
+      if (now - limit.timestamp > this.config.windowMs) {
+        this.limits.delete(key);
       }
     }
   }
