@@ -3,5 +3,5 @@ export interface HealthCheckResponse {
   database_connected: boolean;
   uptime_seconds: number;
   timestamp: string;
-  error?: string;
+  message?: string;
 }
