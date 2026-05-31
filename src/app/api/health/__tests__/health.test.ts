@@ -1,13 +1,22 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
+import { UptimeTracker } from '../uptime-tracker';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
+jest.mock('../uptime-tracker');
 
 describe('Health Check Endpoint', () => {
+  let uptimeTracker: UptimeTracker;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    uptimeTracker = UptimeTracker.getInstance();
+  });
+
+  afterEach(() => {
+    UptimeTracker.resetInstance(); // Clean up singleton
   });
 
   it('returns 200 when database is connected', async () => {
@@ -70,5 +79,17 @@ describe('Health Check Endpoint', () => {
 
     expect(response.status).toBe(503);
     expect(data.database_connected).toBe(false);
+  });
+
+  it('caches database status for performance', async () => {
+    const mockConnection = {
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+
+    await GET();
+    await GET();
+
+    expect(mockConnection.query).toHaveBeenCalledTimes(1); // Should use cached result
   });
 });
