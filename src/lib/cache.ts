@@ -1,23 +1,39 @@
 import NodeCache from 'node-cache';
 
-class CacheManager {
+class Cache {
+  private static instance: Cache;
   private cache: NodeCache;
 
-  constructor() {
-    this.cache = new NodeCache();
+  private constructor() {
+    this.cache = new NodeCache({
+      stdTTL: 300, // 5 minutes default TTL
+      checkperiod: 60, // Check for expired keys every 60 seconds
+      useClones: false
+    });
   }
 
-  async get<T>(key: string): Promise<T | undefined> {
-    return this.cache.get<T>(key);
+  public static getInstance(): Cache {
+    if (!Cache.instance) {
+      Cache.instance = new Cache();
+    }
+    return Cache.instance;
   }
 
-  async set(key: string, value: unknown, ttl: number): Promise<boolean> {
-    return this.cache.set(key, value, ttl);
+  async get(key: string): Promise<unknown> {
+    return this.cache.get(key);
   }
 
-  async del(key: string): Promise<number> {
-    return this.cache.del(key);
+  async set(key: string, value: unknown, ttl?: number): Promise<void> {
+    this.cache.set(key, value, ttl);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.cache.del(key);
+  }
+
+  async flush(): Promise<void> {
+    this.cache.flushAll();
   }
 }
 
-export const cacheManager = new CacheManager();
+export const cache = Cache.getInstance();
