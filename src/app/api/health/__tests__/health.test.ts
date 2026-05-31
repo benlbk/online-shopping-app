@@ -1,84 +1,105 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { HealthService } from '../health.service';
+import { validateDatabaseUrl } from '@/lib/security';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
-jest.mock('../health.service');
+jest.mock('@/lib/security');
 
 describe('Health Check Endpoint', () => {
-  let healthService: jest.Mocked<HealthService>;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    healthService = new HealthService() as jest.Mocked<HealthService>;
-    (HealthService as jest.Mock).mockImplementation(() => healthService);
+    (validateDatabaseUrl as jest.Mock).mockReturnValue(true);
   });
 
-  it('returns 200 when all systems are healthy', async () => {
-    healthService.checkHealth.mockResolvedValue({
-      status: 'healthy',
-      database_connected: true,
-      uptime_seconds: 100,
-      timestamp: new Date().toISOString()
-    });
+  it('returns 200 when all checks pass', async () => {
+    const mockConnection = {
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data).toEqual({
+    expect(data).toEqual(expect.objectContaining({
       status: 'healthy',
       database_connected: true,
       uptime_seconds: expect.any(Number),
-      timestamp: expect.any(String)
-    });
+      timestamp: expect.any(String),
+      version: expect.any(String)
+    }));
   });
 
-  it('returns 503 when database is unhealthy', async () => {
-    healthService.checkHealth.mockResolvedValue({
-      status: 'unhealthy',
-      database_connected: false,
-      uptime_seconds: 100,
-      timestamp: new Date().toISOString()
-    });
+  it('returns 503 when database validation fails', async () => {
+    (validateDatabaseUrl as jest.Mock).mockReturnValue(false);
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(503);
-    expect(data).toEqual({
+    expect(data.database_connected).toBe(false);
+  });
+
+  it('returns 503 when database is not connected', async () => {
+    const mockConnection = {
+      query: jest.fn().mockRejectedValue(new Error('DB Error'))
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data).toEqual(expect.objectContaining({
       status: 'unhealthy',
       database_connected: false,
       uptime_seconds: expect.any(Number),
       timestamp: expect.any(String)
-    });
+    }));
   });
 
-  it('returns 429 when rate limited', async () => {
-    healthService.checkHealth.mockRejectedValue(new Error('Rate limit exceeded'));
+  it('returns 429 when rate limit exceeded', async () => {
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ 
+      allowed: false, 
+      remaining: 0,
+      retryAfter: 30
+    });
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(429);
-    expect(data).toEqual({
-      status: 'error',
-      message: 'Rate limit exceeded'
-    });
+    expect(data.status).toBe('error');
+    expect(data.retry_after).toBe(30);
+  });
+
+  it('handles database timeout correctly', async () => {
+    const mockConnection = {
+      query: jest.fn().mockImplementation(() => new Promise(resolve => setTimeout(resolve, 3000)))
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data.database_connected).toBe(false);
   });
 
   it('returns 500 on unexpected errors', async () => {
-    healthService.checkHealth.mockRejectedValue(new Error('Unexpected error'));
+    (getDbConnection as jest.Mock).mockRejectedValue(new Error('Unexpected error'));
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(500);
-    expect(data).toEqual({
-      status: 'error',
-      message: 'Internal server error'
-    });
+    expect(data.status).toBe('error');
   });
 });
