@@ -5,37 +5,33 @@
 ### 1. Service Health Monitoring
 As a DevOps engineer,
 I want to monitor the shopping cart service health via an HTTP endpoint
-so that I can ensure the service is operating correctly and detect issues quickly
+So that I can detect and respond to service issues quickly
 
 Acceptance Criteria:
 - Endpoint responds to GET /health
 - Returns 200 OK when service is healthy
 - Returns JSON response with service status
 - Includes uptime in seconds
-- Shows database connection status
-- Returns 503 Service Unavailable when critical dependencies are down
+- Shows database connectivity status
 
-### 2. System Integration
+### 2. Load Balancer Integration
 As a system administrator,
-I want to integrate the health check with monitoring systems
-so that I can set up automated alerts and dashboards
+I want the health check to indicate true service availability
+So that load balancers can properly route traffic
 
 Acceptance Criteria:
-- Endpoint follows standard health check format
-- Response is machine-readable JSON
-- Contains boolean flags for critical dependencies
-- Consistent response structure
+- Returns 503 Service Unavailable when database is unreachable
+- Response time under 500ms
+- No authentication required
 
 ## Constraints
 
-- Must be lightweight and respond quickly (<500ms)
-- Must not impact service performance
-- Must not expose sensitive information
-- Must be accessible without authentication
+- Must be lightweight and not impact service performance
+- Must not expose sensitive system information
+- Must be compatible with common load balancer health check requirements
 
 ## Success Criteria
 
-- Health check can detect database connectivity issues
-- Monitoring systems can parse and interpret the response
-- No performance impact on main service functionality
-- Provides accurate uptime tracking
+- Health check can detect actual service issues
+- Zero false positives in health status
+- Monitoring systems can parse and interpret the health status
