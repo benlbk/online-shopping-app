@@ -1,22 +1,15 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { UptimeTracker } from '../uptime-tracker';
+import { logger } from '@/lib/logger';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
-jest.mock('../uptime-tracker');
+jest.mock('@/lib/logger');
 
 describe('Health Check Endpoint', () => {
-  let uptimeTracker: UptimeTracker;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    uptimeTracker = UptimeTracker.getInstance();
-  });
-
-  afterEach(() => {
-    UptimeTracker.resetInstance(); // Clean up singleton
   });
 
   it('returns 200 when database is connected', async () => {
@@ -36,6 +29,7 @@ describe('Health Check Endpoint', () => {
       uptime_seconds: expect.any(Number),
       timestamp: expect.any(String)
     }));
+    expect(logger.info).toHaveBeenCalledWith('Health check completed', expect.any(Object));
   });
 
   it('returns 503 when database is not connected', async () => {
@@ -55,6 +49,7 @@ describe('Health Check Endpoint', () => {
       uptime_seconds: expect.any(Number),
       timestamp: expect.any(String)
     }));
+    expect(logger.error).toHaveBeenCalledWith('Database health check failed', expect.any(Object));
   });
 
   it('returns 429 when rate limit exceeded', async () => {
@@ -79,17 +74,18 @@ describe('Health Check Endpoint', () => {
 
     expect(response.status).toBe(503);
     expect(data.database_connected).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith('Database health check failed', expect.any(Object));
   });
 
-  it('caches database status for performance', async () => {
-    const mockConnection = {
-      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
-    };
-    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+  it('handles unexpected errors gracefully', async () => {
+    (getDbConnection as jest.Mock).mockRejectedValue(new Error('Unexpected error'));
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
-    await GET();
-    await GET();
+    const response = await GET();
+    const data = await response.json();
 
-    expect(mockConnection.query).toHaveBeenCalledTimes(1); // Should use cached result
+    expect(response.status).toBe(500);
+    expect(data.status).toBe('error');
+    expect(logger.error).toHaveBeenCalledWith('Health check failed', expect.any(Object));
   });
 });
