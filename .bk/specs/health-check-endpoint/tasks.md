@@ -1,51 +1,59 @@
 # Health Check Implementation Tasks
 
-## 1. Basic Endpoint Setup (S)
-- Create HealthController class
-- Add GET /health route
-- Implement basic 200 response
-Completion: Endpoint returns 200 OK
+## 1. Setup (S)
+- [ ] Create HealthController class
+- [ ] Add /health route mapping
+- [ ] Define response DTOs
 
-## 2. Uptime Tracking (S)
-- Create UptimeService
-- Store application start time
-- Add uptime calculation
-- Include in health response
-Completion: Uptime correctly reported in seconds
+Completion Criteria:
+- Route responds with 200 and empty JSON
 
-## 3. Database Health Check (M)
-- Create DatabaseHealthService
-- Implement connection pool ping
-- Add timeout handling
-- Integrate with health check response
-Completion: Database status correctly reported
+## 2. Uptime Tracking (M)
+- [ ] Implement UptimeTracker service
+- [ ] Record service start time
+- [ ] Calculate uptime in seconds
+- [ ] Add to health response
 
-## 4. Response Format (S)
-- Define health check response DTO
-- Implement JSON serialization
-- Add response documentation
-Completion: Response matches specified format
+Completion Criteria:
+- Accurate uptime reported in response
+- Survives service restarts
 
-## 5. Error Handling (S)
-- Add error states handling
-- Implement 503 response
-- Add error logging
-Completion: Correct status codes returned
+## 3. Database Monitoring (L)
+- [ ] Create DatabaseHealthMonitor
+- [ ] Implement connection checking
+- [ ] Add connection pooling
+- [ ] Cache status checks
+- [ ] Integrate with health response
 
-## 6. Testing (M)
-- Unit tests for all components
-- Integration tests for database checks
-- Load tests for performance validation
-Completion: 90% test coverage achieved
+Completion Criteria:
+- Database status correctly reported
+- Failed connections return 503
 
-## 7. Monitoring Integration (S)
-- Add structured logging
-- Include Prometheus metrics
-- Document monitoring setup
-Completion: Metrics available for monitoring
+## 4. Error Handling (M)
+- [ ] Add timeout handling
+- [ ] Implement circuit breaker
+- [ ] Add error logging
+- [ ] Handle edge cases
 
-## 8. Documentation (S)
-- API documentation
-- Integration guide
-- Runbook for operations
-Completion: Documentation reviewed and approved
+Completion Criteria:
+- Graceful handling of all failure modes
+- Proper error responses
+
+## 5. Testing (M)
+- [ ] Unit tests for each component
+- [ ] Integration tests
+- [ ] Performance tests
+- [ ] Load tests
+
+Completion Criteria:
+- 90% test coverage
+- Performance within SLA
+
+## 6. Documentation (S)
+- [ ] API documentation
+- [ ] Monitoring integration guide
+- [ ] Update service docs
+
+Completion Criteria:
+- Complete documentation
+- Example curl commands
