@@ -1,37 +1,26 @@
-import { Pool, PoolClient } from 'pg';
-import { config } from '@/config';
+import knex, { Knex } from 'knex';
 
-let pool: Pool | null = null;
+let dbInstance: Knex | null = null;
 
-export async function getDbConnection(): Promise<PoolClient> {
-  if (!pool) {
-    pool = new Pool({
-      host: config.database.host,
-      port: config.database.port,
-      user: config.database.user,
-      password: config.database.password,
-      database: config.database.name,
-      max: 20, // Maximum number of clients in the pool
-      idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-      connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
-      ssl: config.database.ssl ? {
-        rejectUnauthorized: false
-      } : undefined
-    });
-
-    // Error handling for the pool
-    pool.on('error', (err) => {
-      console.error('Unexpected error on idle database client', err);
-      process.exit(-1);
+export async function getDbConnection(): Promise<Knex> {
+  if (!dbInstance) {
+    dbInstance = knex({
+      client: 'pg',
+      connection: process.env.DATABASE_URL,
+      pool: {
+        min: 2,
+        max: 10,
+        acquireTimeoutMillis: 2000,
+        createTimeoutMillis: 2000
+      }
     });
   }
-
-  return await pool.connect();
+  return dbInstance;
 }
 
-export async function closeDbPool(): Promise<void> {
-  if (pool) {
-    await pool.end();
-    pool = null;
+export async function closeDbConnection(): Promise<void> {
+  if (dbInstance) {
+    await dbInstance.destroy();
+    dbInstance = null;
   }
 }
