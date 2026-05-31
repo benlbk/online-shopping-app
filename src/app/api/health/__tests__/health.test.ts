@@ -1,7 +1,6 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { HealthCheckCache } from '@/lib/health-cache';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
