@@ -1,82 +1,85 @@
 import { NextResponse } from 'next/server';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { RedisClient } from '@/lib/redis';
 
-const CACHE_TTL = 5000; // 5 seconds
-const DB_TIMEOUT = 2000; // 2 seconds
-const RATE_LIMIT = 100; // requests per minute
-
-interface HealthStatus {
-  status: string;
+interface HealthResponse {
+  status: 'healthy' | 'unhealthy' | 'error';
   database_connected: boolean;
-  redis_connected: boolean;
+  uptime_seconds: number;
   timestamp: string;
 }
 
-// Use distributed cache for health check results
-const redisClient = new RedisClient();
-const rateLimiter = new RateLimiter(RATE_LIMIT, 60);
+const CACHE_TTL = 5000; // 5 seconds
+const DB_TIMEOUT = 2000; // 2 seconds
+let lastCheck: HealthResponse | null = null;
+let lastCheckTime = 0;
+const startTime = Date.now();
+
+const rateLimiter = new RateLimiter({
+  maxRequests: 10,
+  windowMs: 60000
+});
+
+async function checkDatabase(): Promise<boolean> {
+  try {
+    const db = await getDbConnection();
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT);
+    });
+    
+    const queryPromise = db.query('SELECT 1');
+    await Promise.race([queryPromise, timeoutPromise]);
+    return true;
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    return false;
+  }
+}
+
+async function getHealthStatus(): Promise<HealthResponse> {
+  const now = Date.now();
+  
+  // Return cached response if within TTL
+  if (lastCheck && (now - lastCheckTime) < CACHE_TTL) {
+    return {
+      ...lastCheck,
+      uptime_seconds: Math.floor((now - startTime) / 1000),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  const dbConnected = await checkDatabase();
+  const response: HealthResponse = {
+    status: dbConnected ? 'healthy' : 'unhealthy',
+    database_connected: dbConnected,
+    uptime_seconds: Math.floor((now - startTime) / 1000),
+    timestamp: new Date().toISOString()
+  };
+
+  lastCheck = response;
+  lastCheckTime = now;
+  return response;
+}
 
 export async function GET() {
   try {
-    // Rate limiting check
     const rateLimit = await rateLimiter.check();
     if (!rateLimit.allowed) {
       return NextResponse.json(
-        { status: 'error', message: 'Rate limit exceeded' },
+        { 
+          status: 'error',
+          message: 'Rate limit exceeded',
+          timestamp: new Date().toISOString()
+        },
         { status: 429 }
       );
     }
 
-    // Try to get cached response
-    const cachedResponse = await redisClient.get('health_status');
-    if (cachedResponse) {
-      return NextResponse.json(JSON.parse(cachedResponse));
-    }
-
-    // Check database health with timeout
-    let dbConnected = false;
-    try {
-      const db = await getDbConnection();
-      const dbCheckPromise = db.query('SELECT 1');
-      await Promise.race([
-        dbCheckPromise,
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('DB Timeout')), DB_TIMEOUT)
-        )
-      ]);
-      dbConnected = true;
-    } catch (error) {
-      console.error('Database health check failed:', error);
-      dbConnected = false;
-    }
-
-    // Check Redis connection
-    let redisConnected = false;
-    try {
-      await redisClient.ping();
-      redisConnected = true;
-    } catch (error) {
-      console.error('Redis health check failed:', error);
-      redisConnected = false;
-    }
-
-    const status: HealthStatus = {
-      status: dbConnected && redisConnected ? 'healthy' : 'unhealthy',
-      database_connected: dbConnected,
-      redis_connected: redisConnected,
-      timestamp: new Date().toISOString()
-    };
-
-    // Cache the response
-    await redisClient.setex('health_status', CACHE_TTL / 1000, JSON.stringify(status));
-
+    const health = await getHealthStatus();
     return NextResponse.json(
-      status,
-      { status: dbConnected && redisConnected ? 200 : 503 }
+      health,
+      { status: health.status === 'healthy' ? 200 : 503 }
     );
-
   } catch (error) {
     console.error('Health check failed:', error);
     return NextResponse.json(
