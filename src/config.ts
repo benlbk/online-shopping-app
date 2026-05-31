@@ -1,0 +1,6 @@
+export const Config = {
+  HEALTH_CHECK_TIMEOUT_MS: Number(process.env.HEALTH_CHECK_TIMEOUT_MS) || 2000,
+  HEALTH_CHECK_CACHE_TTL_MS: Number(process.env.HEALTH_CHECK_CACHE_TTL_MS) || 5000,
+  HEALTH_CHECK_RATE_LIMIT: Number(process.env.HEALTH_CHECK_RATE_LIMIT) || 100,
+  HEALTH_CHECK_RATE_WINDOW_MS: Number(process.env.HEALTH_CHECK_RATE_WINDOW_MS) || 60000
+} as const;
