@@ -1,22 +1,63 @@
-import { createClient } from 'redis';
+import Redis from 'ioredis';
 
-const redisConfig = {
-  url: process.env.REDIS_URL,
-  socket: {
-    tls: true,
-    rejectUnauthorized: true,
-    ca: process.env.REDIS_SSL_CA
+export class RedisClient {
+  private static instance: Redis | null = null;
+  private static connectionPromise: Promise<Redis> | null = null;
+
+  private async getConnection(): Promise<Redis> {
+    if (RedisClient.instance) {
+      return RedisClient.instance;
+    }
+
+    if (!RedisClient.connectionPromise) {
+      RedisClient.connectionPromise = new Promise((resolve, reject) => {
+        const client = new Redis({
+          host: process.env.REDIS_HOST,
+          port: parseInt(process.env.REDIS_PORT || '6379'),
+          password: process.env.REDIS_PASSWORD,
+          tls: process.env.REDIS_TLS === 'true',
+          maxRetriesPerRequest: 3,
+          connectTimeout: 2000,
+          enableReadyCheck: true
+        });
+
+        client.on('connect', () => {
+          RedisClient.instance = client;
+          resolve(client);
+        });
+
+        client.on('error', (error) => {
+          console.error('Redis connection error:', error);
+          reject(error);
+        });
+      });
+    }
+
+    return RedisClient.connectionPromise;
   }
-};
 
-// Create a new client for each request to avoid connection management issues
-export async function getRedisClient() {
-  const client = createClient(redisConfig);
-  
-  client.on('error', (err) => {
-    console.error('Redis Client Error:', err);
-  });
+  async get(key: string): Promise<string | null> {
+    const client = await this.getConnection();
+    return client.get(key);
+  }
 
-  await client.connect();
-  return client;
+  async setex(key: string, seconds: number, value: string): Promise<'OK'> {
+    const client = await this.getConnection();
+    return client.setex(key, seconds, value);
+  }
+
+  async incr(key: string): Promise<number> {
+    const client = await this.getConnection();
+    return client.incr(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<number> {
+    const client = await this.getConnection();
+    return client.expire(key, seconds);
+  }
+
+  async ping(): Promise<string> {
+    const client = await this.getConnection();
+    return client.ping();
+  }
 }
