@@ -1,34 +1,43 @@
-import { RedisClient } from './redis';
+import { Redis } from '@/lib/redis';
+import { logger } from '@/lib/logger';
 
 export class RateLimiter {
-  private redis: RedisClient;
-  private limit: number;
-  private window: number;
+  private redis: Redis;
+  private windowSeconds: number;
+  private maxRequests: number;
 
-  constructor(limit: number, windowInSeconds: number) {
-    this.redis = new RedisClient();
-    this.limit = limit;
-    this.window = windowInSeconds;
+  constructor(windowSeconds: number, maxRequests: number) {
+    this.redis = new Redis();
+    this.windowSeconds = windowSeconds;
+    this.maxRequests = maxRequests;
   }
 
   async check(): Promise<{ allowed: boolean; remaining: number }> {
+    const key = 'health_check_rate_limit';
+    
     try {
-      const key = 'rate_limit:health';
-      const current = await this.redis.incr(key);
+      const multi = this.redis.multi();
+      const now = Date.now();
+      const windowStart = now - (this.windowSeconds * 1000);
 
-      // Set expiry on first request
-      if (current === 1) {
-        await this.redis.expire(key, this.window);
-      }
+      multi.zremrangebyscore(key, 0, windowStart);
+      multi.zadd(key, now, now.toString());
+      multi.zcard(key);
+      multi.expire(key, this.windowSeconds);
 
-      const remaining = Math.max(0, this.limit - current);
-      const allowed = current <= this.limit;
+      const results = await multi.exec();
+      const requestCount = results[2] as number;
+
+      const remaining = Math.max(0, this.maxRequests - requestCount);
+      const allowed = requestCount <= this.maxRequests;
 
       return { allowed, remaining };
     } catch (error) {
-      console.error('Rate limiter error:', error);
-      // Fail open to prevent blocking legitimate requests
-      return { allowed: true, remaining: this.limit };
+      logger.error('Rate limiter check failed', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      // Fail open if rate limiting fails
+      return { allowed: true, remaining: 1 };
     }
   }
 }
