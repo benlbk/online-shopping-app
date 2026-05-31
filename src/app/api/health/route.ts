@@ -1,29 +1,28 @@
 import { NextResponse } from 'next/server';
-import { getRedisClient } from '@/lib/redis';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
+import { redis } from '@/lib/redis';
+import { promisify } from 'util';
+import { promises as fs } from 'fs';
 
 const CACHE_TTL = 5000; // 5 seconds
 const DB_TIMEOUT = 2000; // 2 seconds
-let lastCheck: number | null = null;
-let cachedResponse: NextResponse | null = null;
+const RATE_LIMIT = 100; // requests per minute
+let startTime = Date.now();
+let healthCache: any = null;
+let lastCheck = 0;
 
-interface HealthStatus {
-  status: string;
-  database_connected: boolean;
-  redis_connected: boolean;
-  timestamp: string;
-}
-
-async function checkDatabase(): Promise<boolean> {
+async function checkDatabase() {
   try {
     const db = await getDbConnection();
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT);
-    });
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT)
+    );
     
     const queryPromise = db.query('SELECT 1');
     await Promise.race([queryPromise, timeoutPromise]);
+    
+    await db.release(); // Properly release connection
     return true;
   } catch (error) {
     console.error('Database health check failed:', error);
@@ -31,28 +30,35 @@ async function checkDatabase(): Promise<boolean> {
   }
 }
 
-async function checkRedis(): Promise<boolean> {
-  const redis = await getRedisClient();
+async function checkRedis() {
   try {
-    await redis.ping();
+    const pingAsync = promisify(redis.ping).bind(redis);
+    await Promise.race([
+      pingAsync(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Redis timeout')), DB_TIMEOUT))
+    ]);
     return true;
   } catch (error) {
     console.error('Redis health check failed:', error);
     return false;
-  } finally {
-    await redis.quit(); // Properly close connection
+  }
+}
+
+async function checkDiskSpace() {
+  try {
+    const stats = await fs.stat('.');
+    return stats.size > 0;
+  } catch (error) {
+    console.error('Disk check failed:', error);
+    return false;
   }
 }
 
 export async function GET() {
   // Rate limiting
-  const limiter = new RateLimiter({
-    maxRequests: 10,
-    windowMs: 60000,
-    trustProxy: true
-  });
-
+  const limiter = new RateLimiter('health-check', RATE_LIMIT, 60);
   const rateLimit = await limiter.check();
+  
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { status: 'error', message: 'Rate limit exceeded' },
@@ -61,35 +67,42 @@ export async function GET() {
   }
 
   // Use cached response if within TTL
-  const now = Date.now();
-  if (lastCheck && cachedResponse && (now - lastCheck < CACHE_TTL)) {
-    return cachedResponse;
+  if (healthCache && Date.now() - lastCheck < CACHE_TTL) {
+    return NextResponse.json(healthCache.data, { status: healthCache.status });
   }
 
-  // Perform health checks
-  const [dbConnected, redisConnected] = await Promise.all([
+  // Parallel health checks
+  const [dbConnected, redisConnected, diskOk] = await Promise.all([
     checkDatabase(),
-    checkRedis()
+    checkRedis(),
+    checkDiskSpace()
   ]);
 
-  const status: HealthStatus = {
-    status: dbConnected && redisConnected ? 'healthy' : 'unhealthy',
+  const uptime = Math.floor((Date.now() - startTime) / 1000);
+  const isHealthy = dbConnected && redisConnected && diskOk;
+  
+  const response = {
+    status: isHealthy ? 'healthy' : 'unhealthy',
+    uptime_seconds: uptime,
     database_connected: dbConnected,
     redis_connected: redisConnected,
+    disk_ok: diskOk,
     timestamp: new Date().toISOString()
   };
 
-  const responseStatus = status.status === 'healthy' ? 200 : 503;
-  
-  // Update cache
-  lastCheck = now;
-  cachedResponse = NextResponse.json(status, {
-    status: responseStatus,
+  // Cache the response
+  healthCache = {
+    data: response,
+    status: isHealthy ? 200 : 503
+  };
+  lastCheck = Date.now();
+
+  return NextResponse.json(response, { 
+    status: isHealthy ? 200 : 503,
     headers: {
-      'Cache-Control': `private, max-age=${CACHE_TTL / 1000}`,
-      'X-Rate-Limit-Remaining': rateLimit.remaining.toString()
+      'Cache-Control': 'no-store',
+      'X-RateLimit-Limit': RATE_LIMIT.toString(),
+      'X-RateLimit-Remaining': rateLimit.remaining.toString()
     }
   });
-
-  return cachedResponse;
 }
