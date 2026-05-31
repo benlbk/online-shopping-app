@@ -1,74 +1,37 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { checkDatabaseConnection } from '@/lib/db';
-import { getUptime } from '@/lib/health';
-import { RateLimiter } from '@/lib/rate-limiter';
+import { getDbConnection } from '@/lib/db';
 
-// Initialize rate limiter with Redis backend
-const rateLimiter = new RateLimiter({
-  windowMs: 60 * 1000, // 1 minute
-  max: 10 // 10 requests per window
-});
+const startTime = Date.now();
 
-// Cache health check results
-let healthCache = {
-  timestamp: 0,
-  result: null,
-  ttl: 10000 // 10 second cache
+const checkDbConnection = async (): Promise<boolean> => {
+  try {
+    const db = await getDbConnection();
+    await db.ping();
+    return true;
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    return false;
+  }
 };
 
 export async function GET() {
-  try {
-    // Get client IP safely
-    const headersList = headers();
-    const forwardedFor = headersList.get('x-forwarded-for');
-    const clientIp = forwardedFor ? forwardedFor.split(',')[0] : 'unknown';
+  const dbConnected = await checkDbConnection();
+  const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
 
-    // Rate limit by IP
-    const rateLimitResult = await rateLimiter.check(clientIp);
-    if (!rateLimitResult.allowed) {
-      return NextResponse.json(
-        { status: 'error', message: 'Rate limit exceeded' },
-        { status: 429 }
-      );
+  const healthStatus = {
+    status: dbConnected ? 'UP' : 'DOWN',
+    uptime_seconds: uptimeSeconds,
+    database_connected: dbConnected,
+    timestamp: new Date().toISOString()
+  };
+
+  return NextResponse.json(
+    healthStatus,
+    { 
+      status: dbConnected ? 200 : 503,
+      headers: {
+        'Cache-Control': 'no-store, max-age=0'
+      }
     }
-
-    // Check cache
-    const now = Date.now();
-    if (healthCache.result && (now - healthCache.timestamp) < healthCache.ttl) {
-      return healthCache.result;
-    }
-
-    // Get health status
-    const dbConnected = await checkDatabaseConnection();
-    const uptimeSeconds = getUptime();
-
-    const status = dbConnected ? 'healthy' : 'degraded';
-    const statusCode = dbConnected ? 200 : 503;
-
-    const response = NextResponse.json({
-      status,
-      uptime_seconds: uptimeSeconds,
-      database_connected: dbConnected
-    }, { status: statusCode });
-
-    // Update cache
-    healthCache = {
-      timestamp: now,
-      result: response,
-      ttl: healthCache.ttl
-    };
-
-    return response;
-
-  } catch (error) {
-    // Log error safely without exposing details
-    console.error('Health check error:', error.message);
-    
-    return NextResponse.json({
-      status: 'error',
-      uptime_seconds: getUptime(),
-      database_connected: false
-    }, { status: 503 });
-  }
+  );
 }
