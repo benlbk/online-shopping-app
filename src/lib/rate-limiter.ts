@@ -1,56 +1,34 @@
-import { Redis } from 'ioredis';
-
-interface RateLimiterOptions {
-  windowMs: number;
-  max: number;
-}
+import { RedisClient } from './redis';
 
 export class RateLimiter {
-  private redis: Redis;
-  private options: RateLimiterOptions;
+  private redis: RedisClient;
+  private limit: number;
+  private window: number;
 
-  constructor(options: RateLimiterOptions) {
-    this.options = options;
-    this.redis = new Redis(process.env.REDIS_URL!, {
-      maxRetriesPerRequest: 2,
-      enableOfflineQueue: false,
-      connectTimeout: 1000
-    });
+  constructor(limit: number, windowInSeconds: number) {
+    this.redis = new RedisClient();
+    this.limit = limit;
+    this.window = windowInSeconds;
   }
 
   async check(): Promise<{ allowed: boolean; remaining: number }> {
     try {
-      const key = 'rate_limit:health_check';
-      const now = Date.now();
-      const windowStart = now - this.options.windowMs;
+      const key = 'rate_limit:health';
+      const current = await this.redis.incr(key);
 
-      // Remove old entries
-      await this.redis.zremrangebyscore(key, 0, windowStart);
-
-      // Count requests in current window
-      const count = await this.redis.zcard(key);
-
-      if (count >= this.options.max) {
-        return { allowed: false, remaining: 0 };
+      // Set expiry on first request
+      if (current === 1) {
+        await this.redis.expire(key, this.window);
       }
 
-      // Add new request
-      await this.redis.zadd(key, now.toString(), now.toString());
-      await this.redis.expire(key, Math.ceil(this.options.windowMs / 1000));
+      const remaining = Math.max(0, this.limit - current);
+      const allowed = current <= this.limit;
 
-      return {
-        allowed: true,
-        remaining: this.options.max - count - 1
-      };
+      return { allowed, remaining };
     } catch (error) {
       console.error('Rate limiter error:', error);
-      // Fail open if Redis is down
-      return { allowed: true, remaining: 1 };
-    } finally {
-      // Clean up Redis connection
-      if (this.redis.status === 'ready') {
-        await this.redis.quit();
-      }
+      // Fail open to prevent blocking legitimate requests
+      return { allowed: true, remaining: this.limit };
     }
   }
 }
