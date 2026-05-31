@@ -1,17 +1,30 @@
 import { NextResponse } from 'next/server';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { HealthCheckResponse, DatabaseCheckResult } from './types';
+import { cache } from '@/lib/cache';
 
-const START_TIME = Date.now();
-const DB_TIMEOUT = 2000; // 2 seconds
+interface HealthStatus {
+  status: 'healthy' | 'unhealthy' | 'error';
+  database_connected: boolean;
+  uptime_seconds: number;
+  timestamp: string;
+}
+
+const DB_CHECK_TIMEOUT = 2000;
+const CACHE_TTL = 5000; // 5 seconds cache
+const startTime = Date.now();
 const rateLimiter = new RateLimiter('health-check', 10, 60); // 10 requests per minute
 
-async function checkDatabase(): Promise<DatabaseCheckResult> {
-  const connection = await getDbConnection();
+async function checkDatabase(): Promise<boolean> {
   try {
+    const cachedStatus = await cache.get('db-health-status');
+    if (cachedStatus !== undefined) {
+      return cachedStatus as boolean;
+    }
+
+    const connection = await getDbConnection();
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT);
+      setTimeout(() => reject(new Error('Database timeout')), DB_CHECK_TIMEOUT);
     });
 
     await Promise.race([
@@ -19,61 +32,44 @@ async function checkDatabase(): Promise<DatabaseCheckResult> {
       timeoutPromise
     ]);
 
-    return { connected: true };
+    await cache.set('db-health-status', true, CACHE_TTL);
+    return true;
   } catch (error) {
-    return {
-      connected: false,
-      error: error instanceof Error ? error.message : 'Unknown database error'
-    };
-  } finally {
-    connection.release();
+    await cache.set('db-health-status', false, CACHE_TTL);
+    console.error('Database health check failed:', error);
+    return false;
   }
 }
 
-export async function GET(): Promise<NextResponse<HealthCheckResponse>> {
-  // Check rate limit
-  const rateLimit = await rateLimiter.check();
-  if (!rateLimit.allowed) {
+export async function GET(): Promise<NextResponse> {
+  try {
+    const rateLimit = await rateLimiter.check();
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { status: 'error', message: 'Rate limit exceeded' },
+        { status: 429 }
+      );
+    }
+
+    const dbConnected = await checkDatabase();
+    const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
+
+    const healthStatus: HealthStatus = {
+      status: dbConnected ? 'healthy' : 'unhealthy',
+      database_connected: dbConnected,
+      uptime_seconds: uptimeSeconds,
+      timestamp: new Date().toISOString()
+    };
+
     return NextResponse.json(
-      {
-        status: 'error',
-        database_connected: false,
-        uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
-        timestamp: new Date().toISOString(),
-        error: 'Rate limit exceeded'
-      },
-      {
-        status: 429,
-        headers: {
-          'X-Content-Type-Options': 'nosniff',
-          'X-Frame-Options': 'DENY',
-          'Cache-Control': 'no-store'
-        }
-      }
+      healthStatus,
+      { status: dbConnected ? 200 : 503 }
+    );
+  } catch (error) {
+    console.error('Health check failed:', error);
+    return NextResponse.json(
+      { status: 'error', message: 'Internal server error' },
+      { status: 500 }
     );
   }
-
-  // Check database health
-  const dbStatus = await checkDatabase();
-  const uptime = Math.floor((Date.now() - START_TIME) / 1000);
-
-  const response: HealthCheckResponse = {
-    status: dbStatus.connected ? 'healthy' : 'unhealthy',
-    database_connected: dbStatus.connected,
-    uptime_seconds: uptime,
-    timestamp: new Date().toISOString()
-  };
-
-  if (dbStatus.error) {
-    response.error = dbStatus.error;
-  }
-
-  return NextResponse.json(response, {
-    status: dbStatus.connected ? 200 : 503,
-    headers: {
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY', 
-      'Cache-Control': 'no-store'
-    }
-  });
 }
