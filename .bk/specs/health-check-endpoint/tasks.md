@@ -1,52 +1,50 @@
 # Health Check Implementation Tasks
 
-## 1. Setup Health Check Controller (S)
+## 1. Basic Endpoint Setup (S)
 - Create HealthController class
-- Add GET /health endpoint
+- Add GET /health route
 - Implement basic 200 response
 - Add unit tests
-Completion: Controller returns static response
 
-## 2. Implement Uptime Tracking (S)
-- Add service start time tracking
-- Calculate uptime in seconds
-- Add to health response
-- Add unit tests
-Completion: Uptime correctly reported in response
+## 2. Uptime Tracking (S)
+- Create UptimeService
+- Store application start time
+- Add uptime calculation
+- Add unit tests for calculations
 
 ## 3. Database Health Check (M)
-- Implement database connectivity check
+- Create DatabaseHealthChecker
+- Implement connection testing
 - Add timeout handling
-- Cache check results
-- Add unit tests
-Completion: Database status accurately reported
+- Add result caching
+- Write integration tests
 
-## 4. Response Integration (S)
-- Combine all health metrics
-- Format JSON response
-- Add integration tests
-Completion: Complete health response working
+## 4. Response Assembly (S)
+- Create HealthResponse model
+- Implement JSON serialization
+- Add timestamp
+- Add unit tests for serialization
 
-## 5. Error Handling (S)
-- Implement 503 responses
-- Add error status messages
-- Test error scenarios
-Completion: Error cases handled correctly
+## 5. Error Handling (M)
+- Implement 503 response
+- Add error message formatting
+- Create custom exceptions
+- Add error scenario tests
 
-## 6. Rate Limiting (M)
-- Add rate limiting middleware
-- Configure limits
-- Add tests
-Completion: Rate limiting working
+## 6. Integration & Testing (L)
+- Integrate all components
+- Add end-to-end tests
+- Load test endpoint
+- Update API documentation
 
-## 7. Documentation (S)
-- Add API documentation
-- Update service docs
-- Add monitoring integration examples
-Completion: Documentation complete
+## 7. Monitoring Setup (M)
+- Add health check metrics
+- Configure logging
+- Create sample dashboard
+- Document monitoring setup
 
-## 8. Testing & Validation (M)
-- Load testing
-- Integration testing
-- Security testing
-Completion: All tests passing
+Completion Criteria:
+- All tests passing
+- Documentation updated
+- Load tests show no performance impact
+- Monitoring configured
