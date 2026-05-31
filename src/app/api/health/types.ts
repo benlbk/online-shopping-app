@@ -1,7 +1,6 @@
-export interface HealthCheckResponse {
-  status: 'healthy' | 'unhealthy' | 'error';
+export interface HealthStatus {
+  status: 'healthy' | 'unhealthy';
   database_connected: boolean;
   uptime_seconds: number;
   timestamp: string;
-  message?: string;
 }
