@@ -1,28 +1,29 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { DatabaseHealthMonitor } from '../services/database-monitor';
-import { UptimeTracker } from '../services/uptime-tracker';
+import { DatabaseHealthCache } from '../database-health-cache';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
-jest.mock('../services/database-monitor');
-jest.mock('../services/uptime-tracker');
 
 describe('Health Check Endpoint', () => {
-  let dbMonitor: DatabaseHealthMonitor;
-  let uptimeTracker: UptimeTracker;
+  const originalUptime = process.uptime;
   
   beforeEach(() => {
     jest.clearAllMocks();
-    dbMonitor = new DatabaseHealthMonitor();
-    uptimeTracker = new UptimeTracker();
+    process.uptime = jest.fn().mockReturnValue(100);
+    DatabaseHealthCache.getInstance().clear();
+  });
+
+  afterAll(() => {
+    process.uptime = originalUptime;
   });
 
   it('returns 200 when database is connected', async () => {
-    const mockDbStatus = { isConnected: true, lastChecked: Date.now() };
-    jest.spyOn(dbMonitor, 'checkHealth').mockResolvedValue(mockDbStatus);
-    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
+    const mockConnection = {
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
@@ -35,13 +36,14 @@ describe('Health Check Endpoint', () => {
       uptime_seconds: 100,
       timestamp: expect.any(String)
     });
-    expect(dbMonitor.checkHealth).toHaveBeenCalled();
+    expect(mockConnection.query).toHaveBeenCalledWith('SELECT 1');
   });
 
   it('returns 503 when database is not connected', async () => {
-    const mockDbStatus = { isConnected: false, lastChecked: Date.now() };
-    jest.spyOn(dbMonitor, 'checkHealth').mockResolvedValue(mockDbStatus);
-    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
+    const mockConnection = {
+      query: jest.fn().mockRejectedValue(new Error('DB Error'))
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
@@ -49,7 +51,7 @@ describe('Health Check Endpoint', () => {
 
     expect(response.status).toBe(503);
     expect(data).toEqual({
-      status: 'unhealthy',
+      status: 'unhealthy', 
       database_connected: false,
       uptime_seconds: 100,
       timestamp: expect.any(String)
@@ -70,10 +72,10 @@ describe('Health Check Endpoint', () => {
   });
 
   it('handles database timeout correctly', async () => {
-    jest.spyOn(dbMonitor, 'checkHealth').mockImplementation(() => 
-      new Promise(resolve => setTimeout(() => resolve({ isConnected: false, lastChecked: Date.now() }), 3000))
-    );
-    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
+    const mockConnection = {
+      query: jest.fn().mockImplementation(() => new Promise(resolve => setTimeout(resolve, 3000)))
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
@@ -84,28 +86,32 @@ describe('Health Check Endpoint', () => {
   });
 
   it('uses cached results within TTL period', async () => {
-    const mockDbStatus = { isConnected: true, lastChecked: Date.now() };
-    const checkHealthSpy = jest.spyOn(dbMonitor, 'checkHealth')
-      .mockResolvedValue(mockDbStatus);
-    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
+    const mockConnection = {
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     await GET();
     await GET();
 
-    expect(checkHealthSpy).toHaveBeenCalledTimes(1);
+    expect(mockConnection.query).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes cache after TTL expires', async () => {
-    const mockDbStatus = { isConnected: true, lastChecked: Date.now() - 6000 }; // Past 5s TTL
-    const checkHealthSpy = jest.spyOn(dbMonitor, 'checkHealth')
-      .mockResolvedValue(mockDbStatus);
-    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
+    const mockConnection = {
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     await GET();
+    
+    // Fast forward past TTL
+    jest.advanceTimersByTime(6000);
+    
     await GET();
 
-    expect(checkHealthSpy).toHaveBeenCalledTimes(2);
+    expect(mockConnection.query).toHaveBeenCalledTimes(2);
   });
 });
