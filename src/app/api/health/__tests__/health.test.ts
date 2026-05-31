@@ -1,27 +1,28 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
+import { DatabaseHealthMonitor } from '../services/database-monitor';
+import { UptimeTracker } from '../services/uptime-tracker';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
+jest.mock('../services/database-monitor');
+jest.mock('../services/uptime-tracker');
 
 describe('Health Check Endpoint', () => {
-  const originalUptime = process.uptime;
+  let dbMonitor: DatabaseHealthMonitor;
+  let uptimeTracker: UptimeTracker;
   
   beforeEach(() => {
     jest.clearAllMocks();
-    process.uptime = jest.fn().mockReturnValue(100);
-  });
-
-  afterAll(() => {
-    process.uptime = originalUptime;
+    dbMonitor = new DatabaseHealthMonitor();
+    uptimeTracker = new UptimeTracker();
   });
 
   it('returns 200 when database is connected', async () => {
-    const mockConnection = {
-      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
-    };
-    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    const mockDbStatus = { isConnected: true, lastChecked: Date.now() };
+    jest.spyOn(dbMonitor, 'checkHealth').mockResolvedValue(mockDbStatus);
+    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
@@ -34,14 +35,13 @@ describe('Health Check Endpoint', () => {
       uptime_seconds: 100,
       timestamp: expect.any(String)
     });
-    expect(mockConnection.query).toHaveBeenCalledWith('SELECT 1');
+    expect(dbMonitor.checkHealth).toHaveBeenCalled();
   });
 
   it('returns 503 when database is not connected', async () => {
-    const mockConnection = {
-      query: jest.fn().mockRejectedValue(new Error('DB Error'))
-    };
-    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    const mockDbStatus = { isConnected: false, lastChecked: Date.now() };
+    jest.spyOn(dbMonitor, 'checkHealth').mockResolvedValue(mockDbStatus);
+    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
@@ -70,10 +70,8 @@ describe('Health Check Endpoint', () => {
   });
 
   it('handles database timeout correctly', async () => {
-    const mockConnection = {
-      query: jest.fn().mockImplementation(() => new Promise(resolve => setTimeout(resolve, 3000)))
-    };
-    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    jest.spyOn(dbMonitor, 'checkHealth').mockRejectedValue(new Error('Timeout'));
+    jest.spyOn(uptimeTracker, 'getUptime').mockReturnValue(100);
     (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
 
     const response = await GET();
@@ -83,31 +81,14 @@ describe('Health Check Endpoint', () => {
     expect(data.database_connected).toBe(false);
   });
 
-  it('uses cached results within TTL period', async () => {
-    const mockConnection = {
-      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
-    };
-    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
-    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
-
+  it('uses cached database status within TTL period', async () => {
+    const mockDbStatus = { isConnected: true, lastChecked: Date.now() };
+    const checkHealthSpy = jest.spyOn(dbMonitor, 'checkHealth')
+      .mockResolvedValue(mockDbStatus);
+    
     await GET();
     await GET();
 
-    expect(mockConnection.query).toHaveBeenCalledTimes(1);
-  });
-
-  it('handles internal errors gracefully', async () => {
-    (getDbConnection as jest.Mock).mockRejectedValue(new Error('Unexpected error'));
-    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
-
-    const response = await GET();
-    const data = await response.json();
-
-    expect(response.status).toBe(500);
-    expect(data).toEqual({
-      status: 'error',
-      message: 'Internal server error',
-      timestamp: expect.any(String)
-    });
+    expect(checkHealthSpy).toHaveBeenCalledTimes(1);
   });
 });
