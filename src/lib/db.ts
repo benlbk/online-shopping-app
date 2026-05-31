@@ -1,22 +1,41 @@
 import { Pool } from 'pg';
+import { createPool } from 'generic-pool';
 
-let pool: Pool | null = null;
+const dbConfig = {
+  host: process.env.DB_HOST,
+  port: parseInt(process.env.DB_PORT || '5432'),
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  ssl: {
+    rejectUnauthorized: true,
+    ca: process.env.DB_SSL_CA
+  }
+};
+
+// Create a connection pool with proper error handling
+const pool = createPool({
+  create: async () => {
+    const client = new Pool(dbConfig);
+    await client.connect();
+    return client;
+  },
+  destroy: async (client) => {
+    await client.end();
+  }
+}, {
+  max: 10,
+  min: 2,
+  acquireTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
+  evictionRunIntervalMillis: 1000
+});
 
 export async function getDbConnection() {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
-    });
-  }
-  return pool;
-}
-
-export async function closeDbConnection() {
-  if (pool) {
-    await pool.end();
-    pool = null;
+  try {
+    return await pool.acquire();
+  } catch (error) {
+    console.error('Failed to get database connection:', error);
+    throw error;
   }
 }
