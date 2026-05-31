@@ -1,49 +1,56 @@
-# Health Check Endpoint Design
+# Health Check Endpoint Technical Design
 
-## System Architecture
+## Architecture
 
-### Endpoint Design
-- Path: GET /health
-- Response format: application/json
-- Status codes: 200 OK, 503 Service Unavailable
+### Component Overview
+- Health Controller - Handles HTTP requests
+- Health Service - Aggregates health data
+- Database Health Checker - Validates database connectivity
+- Uptime Tracker - Tracks service uptime
 
-### Response Schema
+### Data Flow
+1. Client requests GET /health
+2. Health Controller receives request
+3. Health Service collects metrics
+4. Database connection verified
+5. Response assembled and returned
+
+### Response Format
 ```json
 {
-  "status": "string",
-  "uptime_seconds": "number",
-  "database_connected": "boolean"
+  "status": "UP",
+  "uptime_seconds": 1234,
+  "database_connected": true,
+  "timestamp": "2023-12-01T12:00:00Z"
 }
 ```
 
-## Technical Implementation
-
-### Components
-1. Health Controller
-   - Handles HTTP requests
-   - Aggregates health information
-
-2. Health Service
-   - Tracks service uptime
-   - Checks database connectivity
-   - Caches health check results
+## Technical Decisions
 
 ### Database Health Check
 - Use connection pool ping
-- Implement timeout (2 seconds max)
-- Cache result for 10 seconds to prevent database stress
+- Timeout after 2 seconds
+- Cache result for 5 seconds to prevent load
+
+### Uptime Tracking
+- Store service start time in memory
+- Calculate difference on each request
+- Reset on service restart
 
 ### Error Handling
 - Database timeout returns 503
-- Internal errors return 503
-- Include error details in status field
+- Internal errors return 500
+- All errors include error message in response
 
-### Security Considerations
-- Rate limiting: 10 requests per minute per IP
-- No sensitive information in response
-- Available without authentication
+## Security Considerations
 
-### Performance
+- No authentication required
+- Rate limiting recommended
+- No sensitive data in response
+- Log all health check failures
+
+## Scalability
+
 - Cache health check results
-- Async database checks
-- Minimal computation overhead
+- Implement circuit breaker for database checks
+- Monitor health check endpoint performance
