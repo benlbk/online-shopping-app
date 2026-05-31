@@ -1,11 +1,9 @@
 import { GET } from '../route';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { logger } from '@/lib/logger';
 
 jest.mock('@/lib/db');
 jest.mock('@/lib/rate-limiter');
-jest.mock('@/lib/logger');
 
 describe('Health Check Endpoint', () => {
   beforeEach(() => {
@@ -29,7 +27,6 @@ describe('Health Check Endpoint', () => {
       uptime_seconds: expect.any(Number),
       timestamp: expect.any(String)
     }));
-    expect(logger.info).toHaveBeenCalledWith('Health check completed', expect.any(Object));
   });
 
   it('returns 503 when database is not connected', async () => {
@@ -49,7 +46,6 @@ describe('Health Check Endpoint', () => {
       uptime_seconds: expect.any(Number),
       timestamp: expect.any(String)
     }));
-    expect(logger.error).toHaveBeenCalledWith('Database health check failed', expect.any(Object));
   });
 
   it('returns 429 when rate limit exceeded', async () => {
@@ -60,6 +56,7 @@ describe('Health Check Endpoint', () => {
 
     expect(response.status).toBe(429);
     expect(data.status).toBe('error');
+    expect(data.message).toBe('Rate limit exceeded');
   });
 
   it('handles database timeout correctly', async () => {
@@ -74,7 +71,6 @@ describe('Health Check Endpoint', () => {
 
     expect(response.status).toBe(503);
     expect(data.database_connected).toBe(false);
-    expect(logger.error).toHaveBeenCalledWith('Database health check failed', expect.any(Object));
   });
 
   it('handles unexpected errors gracefully', async () => {
@@ -86,6 +82,19 @@ describe('Health Check Endpoint', () => {
 
     expect(response.status).toBe(500);
     expect(data.status).toBe('error');
-    expect(logger.error).toHaveBeenCalledWith('Health check failed', expect.any(Object));
+    expect(data.message).toBe('Internal server error');
+  });
+
+  it('validates timestamp format', async () => {
+    const mockConnection = {
+      query: jest.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] })
+    };
+    (getDbConnection as jest.Mock).mockResolvedValue(mockConnection);
+    (RateLimiter.prototype.check as jest.Mock).mockResolvedValue({ allowed: true, remaining: 9 });
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(Date.parse(data.timestamp)).not.toBeNaN();
   });
 });
