@@ -5,7 +5,7 @@
 ### Component Overview
 - Health Controller - Handles HTTP requests
 - Health Service - Aggregates health data
-- Database Monitor - Checks database connectivity
+- Database Monitor - Checks DB connectivity
 - Uptime Tracker - Tracks service uptime
 
 ### Data Flow
@@ -14,47 +14,45 @@
 3. Health Service aggregates status data
 4. Response returned to client
 
-### Response Format
-```json
+## Technical Specifications
+
+### API Contract
+```
+GET /health
+
+Responses:
+200 OK
 {
   "status": "healthy",
-  "uptime_seconds": 3600,
-  "database_connected": true
+  "uptime_seconds": number,
+  "database_connected": boolean
+}
+
+503 Service Unavailable
+{
+  "status": "unhealthy",
+  "uptime_seconds": number,
+  "database_connected": false
 }
 ```
 
-## Technical Decisions
+### Implementation Details
+- Use singleton pattern for uptime tracking
+- Implement database connection pooling
+- Cache database status check (5 second TTL)
+- Use atomic operations for thread safety
 
-### Database Check Strategy
-Use connection pool ping with 2-second timeout to verify database connectivity
+### Error Handling
+- Timeout for DB health check (2 seconds)
+- Circuit breaker for repeated DB failures
+- Graceful degradation if uptime tracking fails
 
-Rationale:
-- Quick response time
-- Minimal database load
-- Reliable connectivity check
+### Security Considerations
+- Rate limiting on endpoint
+- No sensitive data in response
+- No authentication to allow monitoring
 
-### Uptime Tracking
-Store service start time in memory and calculate difference
-
-Rationale:
-- Simple implementation
-- No persistence needed
-- Accurate to the second
-
-## Error Handling
-
-- Database timeout -> Return 503
-- Database connection error -> Return 503
-- All other errors -> Return 500
-
-## Security Considerations
-
-- No authentication to allow load balancer access
-- Limited information exposure
-- Rate limiting recommended
-
-## Monitoring Integration
-
-- Prometheus metrics format support
-- Structured logging of health check results
-- Alert on repeated failures
+### Performance
+- Response time target: < 500ms
+- Minimal CPU/memory overhead
+- Connection pool reuse
