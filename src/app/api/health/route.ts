@@ -3,44 +3,47 @@ import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
 import { DatabaseHealthMonitor } from './DatabaseHealthMonitor';
 import { UptimeTracker } from './UptimeTracker';
-import { HealthResponse } from './types';
 
-// Configurable rate limits loaded from environment
-const RATE_LIMIT = {
-  requests: Number(process.env.HEALTH_CHECK_RATE_LIMIT) || 100,
-  window: Number(process.env.HEALTH_CHECK_RATE_WINDOW) || 60
-};
+// Configurable constants moved to environment variables
+const DB_TIMEOUT_MS = Number(process.env.HEALTH_DB_TIMEOUT_MS) || 2000;
+const RATE_LIMIT = Number(process.env.HEALTH_RATE_LIMIT) || 100;
+const RATE_WINDOW_MS = Number(process.env.HEALTH_RATE_WINDOW_MS) || 60000;
 
-// Connection pool configuration
-const DB_POOL = {
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000
-};
+// Singleton instances
+const dbMonitor = new DatabaseHealthMonitor();
+const uptimeTracker = new UptimeTracker();
+const rateLimiter = new RateLimiter(RATE_LIMIT, RATE_WINDOW_MS);
 
-const dbMonitor = new DatabaseHealthMonitor(DB_POOL);
-const uptimeTracker = UptimeTracker.getInstance();
-const rateLimiter = new RateLimiter(RATE_LIMIT.requests, RATE_LIMIT.window);
+interface HealthResponse {
+  status: 'healthy' | 'unhealthy' | 'error';
+  database_connected?: boolean;
+  uptime_seconds?: number;
+  timestamp: string;
+  message?: string;
+}
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(): Promise<NextResponse<HealthResponse>> {
+  // Rate limiting check
+  const rateLimit = await rateLimiter.check();
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        status: 'error',
+        message: 'Rate limit exceeded',
+        timestamp: new Date().toISOString()
+      },
+      { status: 429 }
+    );
+  }
+
   try {
-    // Check rate limit
-    const rateLimit = await rateLimiter.check();
-    if (!rateLimit.allowed) {
-      return NextResponse.json(
-        { status: 'error', message: 'Rate limit exceeded' },
-        { status: 429 }
-      );
-    }
-
-    // Get health status
-    const dbStatus = await dbMonitor.checkHealth();
-    const uptime = uptimeTracker.getUptimeSeconds();
-
+    // Get database status using monitor with proper caching
+    const dbStatus = await dbMonitor.checkHealth(DB_TIMEOUT_MS);
+    
     const response: HealthResponse = {
       status: dbStatus ? 'healthy' : 'unhealthy',
       database_connected: dbStatus,
-      uptime_seconds: uptime,
+      uptime_seconds: uptimeTracker.getUptime(),
       timestamp: new Date().toISOString()
     };
 
@@ -50,11 +53,12 @@ export async function GET(): Promise<NextResponse> {
     );
 
   } catch (error) {
-    console.error('Health check failed:', error);
+    console.error('Health check error:', error);
     return NextResponse.json(
       {
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal error during health check',
+        timestamp: new Date().toISOString()
       },
       { status: 500 }
     );
