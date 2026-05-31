@@ -1,79 +1,77 @@
 import { NextResponse } from 'next/server';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { HealthCheckResponse } from './types';
-import { cacheManager } from '@/lib/cache';
+import { logger } from '@/lib/logger';
 
-const CACHE_KEY = 'health_status';
-const CACHE_TTL = 10; // 10 seconds
-const DB_TIMEOUT = 2000; // 2 seconds
+interface HealthStatus {
+  status: 'healthy' | 'unhealthy' | 'error';
+  database_connected: boolean;
+  uptime_seconds: number;
+  timestamp: string;
+}
 
-export async function GET(): Promise<NextResponse<HealthCheckResponse>> {
-  const rateLimiter = new RateLimiter('health_check');
-  const rateLimitCheck = await rateLimiter.check();
+const START_TIME = Date.now();
+const DB_TIMEOUT = 2000;
+const rateLimiter = new RateLimiter('health-check', 10, 60);
 
-  if (!rateLimitCheck.allowed) {
-    return NextResponse.json(
-      {
-        status: 'error',
-        message: 'Rate limit exceeded',
-        timestamp: new Date().toISOString(),
-        uptime_seconds: process.uptime(),
-        database_connected: false
-      },
-      { status: 429 }
-    );
-  }
-
-  // Check cache first
-  const cachedStatus = await cacheManager.get<HealthCheckResponse>(CACHE_KEY);
-  if (cachedStatus) {
-    return NextResponse.json(cachedStatus);
-  }
-
-  let dbConnection = null;
+async function checkDatabase(): Promise<boolean> {
   try {
-    dbConnection = await getDbConnection();
-    
-    // Use parameterized query for safety
-    const query = {
-      text: 'SELECT $1::integer as check',
-      values: [1]
-    };
-
+    const connection = await getDbConnection();
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT);
     });
 
     await Promise.race([
-      dbConnection.query(query),
+      connection.query('SELECT 1'),
       timeoutPromise
     ]);
+    return true;
+  } catch (error) {
+    logger.error('Database health check failed', { error: error instanceof Error ? error.message : 'Unknown error' });
+    return false;
+  }
+}
 
-    const response: HealthCheckResponse = {
-      status: 'healthy',
-      database_connected: true,
-      uptime_seconds: process.uptime(),
+export async function GET(): Promise<NextResponse<HealthStatus>> {
+  try {
+    const rateLimit = await rateLimiter.check();
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        {
+          status: 'error',
+          database_connected: false,
+          uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
+          timestamp: new Date().toISOString()
+        },
+        { status: 429 }
+      );
+    }
+
+    const dbConnected = await checkDatabase();
+    const status: HealthStatus = {
+      status: dbConnected ? 'healthy' : 'unhealthy',
+      database_connected: dbConnected,
+      uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
       timestamp: new Date().toISOString()
     };
 
-    // Cache successful response
-    await cacheManager.set(CACHE_KEY, response, CACHE_TTL);
+    logger.info('Health check completed', { status });
 
-    return NextResponse.json(response);
+    return NextResponse.json(
+      status,
+      { status: dbConnected ? 200 : 503 }
+    );
   } catch (error) {
-    const response: HealthCheckResponse = {
-      status: 'unhealthy',
-      database_connected: false,
-      uptime_seconds: process.uptime(),
-      timestamp: new Date().toISOString(),
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-
-    return NextResponse.json(response, { status: 503 });
-  } finally {
-    if (dbConnection) {
-      await dbConnection.release();
-    }
+    logger.error('Health check failed', { error: error instanceof Error ? error.message : 'Unknown error' });
+    
+    return NextResponse.json(
+      {
+        status: 'error',
+        database_connected: false,
+        uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
+        timestamp: new Date().toISOString()
+      },
+      { status: 500 }
+    );
   }
 }
