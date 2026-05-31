@@ -1,64 +1,62 @@
 import { getDbConnection } from '@/lib/db';
-import { RateLimiter } from '@/lib/rate-limiter';
-import { HealthStatus } from './types';
+import { Cache } from '@/lib/cache';
+import { Config } from '@/config';
+
+export interface HealthStatus {
+  status: 'healthy' | 'unhealthy';
+  database_connected: boolean;
+  uptime_seconds: number;
+  timestamp: string;
+}
 
 export class HealthService {
-  private static instance: HealthService;
-  private startTime: number;
-  private rateLimiter: RateLimiter;
-  private lastCheckTime: number = 0;
-  private cachedStatus: HealthStatus | null = null;
-  private readonly CACHE_TTL = 5000; // 5 seconds
+  private cache: Cache<boolean>;
+  private readonly dbTimeoutMs: number;
+  private readonly cacheTTLMs: number;
 
-  private constructor() {
-    this.startTime = Date.now();
-    this.rateLimiter = new RateLimiter(10, 60); // 10 requests per minute
+  constructor() {
+    this.dbTimeoutMs = Config.HEALTH_CHECK_TIMEOUT_MS;
+    this.cacheTTLMs = Config.HEALTH_CHECK_CACHE_TTL_MS;
+    this.cache = new Cache<boolean>(this.cacheTTLMs);
   }
 
-  public static getInstance(): HealthService {
-    if (!HealthService.instance) {
-      HealthService.instance = new HealthService();
-    }
-    return HealthService.instance;
-  }
-
-  public async checkHealth(): Promise<HealthStatus> {
-    await this.rateLimiter.check();
-
-    const now = Date.now();
-    if (this.cachedStatus && (now - this.lastCheckTime) < this.CACHE_TTL) {
-      return {
-        ...this.cachedStatus,
-        uptime_seconds: Math.floor((now - this.startTime) / 1000),
-        timestamp: new Date().toISOString()
-      };
-    }
-
+  async getStatus(): Promise<HealthStatus> {
     const dbConnected = await this.checkDatabase();
     
-    const status: HealthStatus = {
+    return {
       status: dbConnected ? 'healthy' : 'unhealthy',
       database_connected: dbConnected,
-      uptime_seconds: Math.floor((now - this.startTime) / 1000),
+      uptime_seconds: Math.floor(process.uptime()),
       timestamp: new Date().toISOString()
     };
-
-    this.cachedStatus = status;
-    this.lastCheckTime = now;
-
-    return status;
   }
 
   private async checkDatabase(): Promise<boolean> {
+    const cachedStatus = this.cache.get('db_status');
+    if (cachedStatus !== undefined) {
+      return cachedStatus;
+    }
+
+    let connection;
     try {
-      const connection = await getDbConnection();
+      connection = await getDbConnection();
       const result = await Promise.race([
         connection.query('SELECT 1'),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Database timeout')), 2000))
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database timeout')), this.dbTimeoutMs)
+        )
       ]);
-      return !!result;
+      
+      const isConnected = Boolean(result?.rows?.[0]?.['?column?']);
+      this.cache.set('db_status', isConnected);
+      return isConnected;
     } catch (error) {
+      this.cache.set('db_status', false);
       return false;
+    } finally {
+      if (connection) {
+        await connection.release();
+      }
     }
   }
 }
