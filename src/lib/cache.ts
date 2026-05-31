@@ -1,39 +1,35 @@
-import NodeCache from 'node-cache';
-
-class Cache {
-  private static instance: Cache;
-  private cache: NodeCache;
-
-  private constructor() {
-    this.cache = new NodeCache({
-      stdTTL: 300, // 5 minutes default TTL
-      checkperiod: 60, // Check for expired keys every 60 seconds
-      useClones: false
-    });
-  }
-
-  public static getInstance(): Cache {
-    if (!Cache.instance) {
-      Cache.instance = new Cache();
-    }
-    return Cache.instance;
-  }
-
-  async get(key: string): Promise<unknown> {
-    return this.cache.get(key);
-  }
-
-  async set(key: string, value: unknown, ttl?: number): Promise<void> {
-    this.cache.set(key, value, ttl);
-  }
-
-  async delete(key: string): Promise<void> {
-    this.cache.del(key);
-  }
-
-  async flush(): Promise<void> {
-    this.cache.flushAll();
-  }
+interface CacheEntry<T> {
+  value: T;
+  expires: number;
 }
 
-export const cache = Cache.getInstance();
+export class Cache<T> {
+  private cache: Map<string, CacheEntry<T>>;
+  private ttl: number;
+
+  constructor(ttlMs: number) {
+    this.cache = new Map();
+    this.ttl = ttlMs;
+  }
+
+  get(key: string): T | undefined {
+    const entry = this.cache.get(key);
+    if (!entry) return undefined;
+
+    if (Date.now() > entry.expires) {
+      this.cache.delete(key);
+      return undefined;
+    }
+
+    return entry.value;
+  }
+
+  set(key: string, value: T): void {
+    const expires = Date.now() + this.ttl;
+    this.cache.set(key, { value, expires });
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
