@@ -1,93 +1,79 @@
 import { NextResponse } from 'next/server';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { validateDatabaseUrl } from '@/lib/security';
+import { HealthCheckResponse, DatabaseCheckResult } from './types';
 
 const START_TIME = Date.now();
-const DB_TIMEOUT = 2000;
-const MAX_REQUESTS_PER_MINUTE = 60;
+const DB_TIMEOUT = 2000; // 2 seconds
+const rateLimiter = new RateLimiter('health-check', 10, 60); // 10 requests per minute
 
-interface HealthResponse {
-  status: 'healthy' | 'unhealthy' | 'error';
-  database_connected: boolean;
-  uptime_seconds: number;
-  timestamp: string;
-  version?: string;
-}
-
-async function checkDatabase(): Promise<boolean> {
+async function checkDatabase(): Promise<DatabaseCheckResult> {
+  const connection = await getDbConnection();
   try {
-    // Validate database URL before connecting
-    if (!validateDatabaseUrl(process.env.DATABASE_URL)) {
-      throw new Error('Invalid database URL');
-    }
-
-    const db = await getDbConnection();
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT);
     });
 
-    // Race between query and timeout
     await Promise.race([
-      db.query('SELECT 1'),
+      connection.query('SELECT 1'),
       timeoutPromise
     ]);
 
-    return true;
+    return { connected: true };
   } catch (error) {
-    console.error('Database health check failed:', error);
-    return false;
+    return {
+      connected: false,
+      error: error instanceof Error ? error.message : 'Unknown database error'
+    };
+  } finally {
+    connection.release();
   }
 }
 
-function getUptime(): number {
-  return Math.floor((Date.now() - START_TIME) / 1000);
-}
-
-export async function GET(): Promise<NextResponse> {
-  try {
-    // Rate limiting check
-    const limiter = new RateLimiter('health-check', MAX_REQUESTS_PER_MINUTE);
-    const rateLimitCheck = await limiter.check();
-
-    if (!rateLimitCheck.allowed) {
-      return NextResponse.json(
-        {
-          status: 'error',
-          message: 'Rate limit exceeded',
-          retry_after: rateLimitCheck.retryAfter
-        },
-        { status: 429 }
-      );
-    }
-
-    // Perform health checks in parallel
-    const [dbConnected] = await Promise.all([
-      checkDatabase()
-    ]);
-
-    const response: HealthResponse = {
-      status: dbConnected ? 'healthy' : 'unhealthy',
-      database_connected: dbConnected,
-      uptime_seconds: getUptime(),
-      timestamp: new Date().toISOString(),
-      version: process.env.APP_VERSION
-    };
-
-    return NextResponse.json(
-      response,
-      { status: dbConnected ? 200 : 503 }
-    );
-
-  } catch (error) {
-    console.error('Health check failed:', error);
+export async function GET(): Promise<NextResponse<HealthCheckResponse>> {
+  // Check rate limit
+  const rateLimit = await rateLimiter.check();
+  if (!rateLimit.allowed) {
     return NextResponse.json(
       {
         status: 'error',
-        message: 'Internal server error',
-        timestamp: new Date().toISOString()
+        database_connected: false,
+        uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
+        timestamp: new Date().toISOString(),
+        error: 'Rate limit exceeded'
       },
-      { status: 500 }
+      {
+        status: 429,
+        headers: {
+          'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'DENY',
+          'Cache-Control': 'no-store'
+        }
+      }
     );
   }
+
+  // Check database health
+  const dbStatus = await checkDatabase();
+  const uptime = Math.floor((Date.now() - START_TIME) / 1000);
+
+  const response: HealthCheckResponse = {
+    status: dbStatus.connected ? 'healthy' : 'unhealthy',
+    database_connected: dbStatus.connected,
+    uptime_seconds: uptime,
+    timestamp: new Date().toISOString()
+  };
+
+  if (dbStatus.error) {
+    response.error = dbStatus.error;
+  }
+
+  return NextResponse.json(response, {
+    status: dbStatus.connected ? 200 : 503,
+    headers: {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY', 
+      'Cache-Control': 'no-store'
+    }
+  });
 }
