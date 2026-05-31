@@ -1,107 +1,109 @@
 import { NextResponse } from 'next/server';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { Redis } from 'ioredis';
+import { kv } from '@vercel/kv';
 
-interface HealthResponse {
-  status: 'healthy' | 'unhealthy' | 'error';
+const CACHE_KEY = 'health_status';
+const CACHE_TTL = 5; // 5 seconds
+const DB_TIMEOUT = 2000; // 2 seconds
+
+interface HealthStatus {
+  status: string;
   database_connected: boolean;
-  uptime_seconds: number;
+  redis_connected: boolean;
   timestamp: string;
 }
 
-// Use Redis for distributed uptime tracking
-const redis = new Redis(process.env.REDIS_URL!, {
-  maxRetriesPerRequest: 3,
-  enableOfflineQueue: false,
-  connectTimeout: 1000
-});
+async function checkDatabase(): Promise<boolean> {
+  try {
+    const conn = await getDbConnection();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DB_TIMEOUT);
+    
+    await Promise.race([
+      conn.query('SELECT 1', undefined, { signal: controller.signal }),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT)
+      )
+    ]);
+    
+    clearTimeout(timeoutId);
+    return true;
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    return false;
+  }
+}
 
-// Cache health check results
-let healthCache: {
-  response: HealthResponse;
-  timestamp: number;
-} | null = null;
+async function checkRedis(): Promise<boolean> {
+  try {
+    await kv.ping();
+    return true;
+  } catch (error) {
+    console.error('Redis health check failed:', error);
+    return false;
+  }
+}
 
-const CACHE_TTL = 5000; // 5 seconds
-const DB_TIMEOUT = 2000; // 2 seconds
+async function getHealthStatus(): Promise<HealthStatus> {
+  // Try to get cached status
+  const cached = await kv.get<HealthStatus>(CACHE_KEY);
+  if (cached) {
+    return cached;
+  }
 
-const rateLimiter = new RateLimiter({
-  windowMs: 60000,
-  max: 100
-});
+  // Check critical dependencies
+  const [dbConnected, redisConnected] = await Promise.all([
+    checkDatabase(),
+    checkRedis()
+  ]);
+
+  const status: HealthStatus = {
+    status: dbConnected && redisConnected ? 'healthy' : 'unhealthy',
+    database_connected: dbConnected,
+    redis_connected: redisConnected,
+    timestamp: new Date().toISOString()
+  };
+
+  // Cache the result
+  await kv.set(CACHE_KEY, status, { ex: CACHE_TTL });
+  return status;
+}
 
 export async function GET() {
-  try {
-    // Check rate limit
-    const rateLimit = await rateLimiter.check();
-    if (!rateLimit.allowed) {
-      return NextResponse.json(
-        { status: 'error', message: 'Rate limit exceeded' },
-        { status: 429 }
-      );
-    }
-
-    // Use cached response if available and fresh
-    if (healthCache && Date.now() - healthCache.timestamp < CACHE_TTL) {
-      return NextResponse.json(healthCache.response);
-    }
-
-    // Get uptime from Redis
-    const startTime = await redis.get('service_start_time');
-    if (!startTime) {
-      await redis.set('service_start_time', Date.now().toString());
-    }
-    const uptime = Math.floor(
-      (Date.now() - parseInt(startTime || Date.now().toString())) / 1000
-    );
-
-    // Check database health with timeout
-    let dbConnected = false;
-    try {
-      const db = await getDbConnection();
-      const dbCheckPromise = db.query('SELECT 1');
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Database timeout')), DB_TIMEOUT)
-      );
-      await Promise.race([dbCheckPromise, timeoutPromise]);
-      dbConnected = true;
-    } catch (error) {
-      console.error('Database health check failed:', error);
-      dbConnected = false;
-    }
-
-    const response: HealthResponse = {
-      status: dbConnected ? 'healthy' : 'unhealthy',
-      database_connected: dbConnected,
-      uptime_seconds: uptime,
-      timestamp: new Date().toISOString()
-    };
-
-    // Cache the response
-    healthCache = {
-      response,
-      timestamp: Date.now()
-    };
-
+  // Rate limiting
+  const limiter = new RateLimiter();
+  const rateLimit = await limiter.check();
+  
+  if (!rateLimit.allowed) {
     return NextResponse.json(
-      response,
-      { status: dbConnected ? 200 : 503 }
+      { status: 'error', message: 'Rate limit exceeded' },
+      { status: 429 }
+    );
+  }
+
+  try {
+    const health = await getHealthStatus();
+    
+    return NextResponse.json(
+      health,
+      { 
+        status: health.status === 'healthy' ? 200 : 503,
+        headers: {
+          'Cache-Control': `public, max-age=${CACHE_TTL}`,
+          'X-RateLimit-Remaining': rateLimit.remaining.toString()
+        }
+      }
     );
   } catch (error) {
     console.error('Health check failed:', error);
     return NextResponse.json(
-      {
+      { 
         status: 'error',
         message: 'Internal server error',
         timestamp: new Date().toISOString()
       },
       { status: 500 }
     );
-  } finally {
-    // Clean up resources
-    if (redis.status === 'ready') {
-      await redis.quit();
-    }
   }
 }
