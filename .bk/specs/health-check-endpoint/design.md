@@ -5,52 +5,56 @@
 ### Component Overview
 - Health Controller - Handles HTTP requests
 - Health Service - Aggregates health data
-- Database Health Checker - Validates database connectivity
+- Database Monitor - Checks database connectivity
 - Uptime Tracker - Tracks service uptime
 
 ### Data Flow
 1. Client requests GET /health
 2. Health Controller receives request
-3. Health Service collects metrics
-4. Database connection verified
-5. Response assembled and returned
+3. Health Service aggregates status data
+4. Response returned to client
 
 ### Response Format
 ```json
 {
-  "status": "UP",
-  "uptime_seconds": 1234,
-  "database_connected": true,
-  "timestamp": "2023-12-01T12:00:00Z"
+  "status": "healthy",
+  "uptime_seconds": 3600,
+  "database_connected": true
 }
 ```
 
 ## Technical Decisions
 
-### Database Health Check
-- Use connection pool ping
-- Timeout after 2 seconds
-- Cache result for 5 seconds to prevent load
+### Database Check Strategy
+Use connection pool ping with 2-second timeout to verify database connectivity
+
+Rationale:
+- Quick response time
+- Minimal database load
+- Reliable connectivity check
 
 ### Uptime Tracking
-- Store service start time in memory
-- Calculate difference on each request
-- Reset on service restart
+Store service start time in memory and calculate difference
 
-### Error Handling
-- Database timeout returns 503
-- Internal errors return 500
-- All errors include error message in response
+Rationale:
+- Simple implementation
+- No persistence needed
+- Accurate to the second
+
+## Error Handling
+
+- Database timeout -> Return 503
+- Database connection error -> Return 503
+- All other errors -> Return 500
 
 ## Security Considerations
 
-- No authentication required
+- No authentication to allow load balancer access
+- Limited information exposure
 - Rate limiting recommended
-- No sensitive data in response
-- Log all health check failures
 
-## Scalability
+## Monitoring Integration
 
-- Cache health check results
-- Implement circuit breaker for database checks
-- Monitor health check endpoint performance
+- Prometheus metrics format support
+- Structured logging of health check results
+- Alert on repeated failures
