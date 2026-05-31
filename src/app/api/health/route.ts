@@ -1,33 +1,29 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { getDbConnection } from '@/lib/db';
 import { RateLimiter } from '@/lib/rate-limiter';
-import { HealthCheckCache } from '@/lib/health-cache';
-import { DatabaseError } from '@/lib/errors';
+import { HealthCheckCache } from './health-cache';
+import { DatabaseHealthChecker } from './database-checker';
+import { UptimeTracker } from './uptime-tracker';
 
-const START_TIME = Date.now();
-const DB_TIMEOUT = 2000; // 2 second timeout
-const CACHE_TTL = 5000; // 5 second cache
+const CACHE_TTL = 5000; // 5 seconds
+const DB_TIMEOUT = 2000; // 2 seconds
 
+// Response schema validation
+const HealthResponseSchema = z.object({
+  status: z.enum(['healthy', 'unhealthy', 'error']),
+  database_connected: z.boolean(),
+  uptime_seconds: z.number(),
+  timestamp: z.string()
+});
+
+type HealthResponse = z.infer<typeof HealthResponseSchema>;
+
+// Singleton instances
 const healthCache = new HealthCheckCache(CACHE_TTL);
-const rateLimiter = new RateLimiter();
-
-async function checkDatabase(): Promise<boolean> {
-  try {
-    const connection = await getDbConnection();
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new DatabaseError('Database check timed out')), DB_TIMEOUT);
-    });
-
-    await Promise.race([
-      connection.query('SELECT 1'),
-      timeoutPromise
-    ]);
-    return true;
-  } catch (error) {
-    console.error('Database health check failed:', error);
-    return false;
-  }
-}
+const dbChecker = new DatabaseHealthChecker(DB_TIMEOUT);
+const uptimeTracker = new UptimeTracker();
+const rateLimiter = new RateLimiter('health-check', 10, 60);
 
 export async function GET() {
   try {
@@ -40,28 +36,32 @@ export async function GET() {
       );
     }
 
-    // Try to get cached response
+    // Check cache first
     const cachedResponse = healthCache.get();
     if (cachedResponse) {
       return NextResponse.json(cachedResponse);
     }
 
     // Check database health
-    const dbConnected = await checkDatabase();
-    
-    const response = {
-      status: dbConnected ? 'healthy' : 'unhealthy',
-      database_connected: dbConnected,
-      uptime_seconds: Math.floor((Date.now() - START_TIME) / 1000),
+    const dbConnection = await getDbConnection();
+    const dbHealthy = await dbChecker.check(dbConnection);
+
+    const response: HealthResponse = {
+      status: dbHealthy ? 'healthy' : 'unhealthy',
+      database_connected: dbHealthy,
+      uptime_seconds: uptimeTracker.getUptime(),
       timestamp: new Date().toISOString()
     };
 
-    // Cache the response
+    // Validate response
+    HealthResponseSchema.parse(response);
+
+    // Cache successful response
     healthCache.set(response);
 
     return NextResponse.json(
       response,
-      { status: dbConnected ? 200 : 503 }
+      { status: dbHealthy ? 200 : 503 }
     );
 
   } catch (error) {
@@ -69,8 +69,10 @@ export async function GET() {
     return NextResponse.json(
       {
         status: 'error',
-        message: 'Internal server error',
-        timestamp: new Date().toISOString()
+        database_connected: false,
+        uptime_seconds: uptimeTracker.getUptime(),
+        timestamp: new Date().toISOString(),
+        message: 'Internal server error'
       },
       { status: 500 }
     );
