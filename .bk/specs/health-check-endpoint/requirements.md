@@ -20,7 +20,7 @@ I want the health check to indicate true service availability
 So that load balancers can properly route traffic
 
 Acceptance Criteria:
-- Returns 503 Service Unavailable when database is unreachable
+- Returns 503 Service Unavailable if database is unreachable
 - Response time under 500ms
 - No authentication required
 
@@ -28,10 +28,11 @@ Acceptance Criteria:
 
 - Must be lightweight and not impact service performance
 - Must not expose sensitive system information
-- Must be compatible with common load balancer health check requirements
+- Must be compatible with common monitoring tools
 
 ## Success Criteria
 
 - Health check can detect actual service issues
-- Zero false positives in health status
-- Monitoring systems can parse and interpret the health status
+- Monitoring systems can parse the response format
+- No false positives in health status
+- Minimal performance overhead
