@@ -1,53 +1,53 @@
-import { Pool, PoolConfig } from 'pg';
-import { LRUCache } from 'lru-cache';
+import { getDbConnection } from '@/lib/db';
 
 export class DatabaseHealthMonitor {
-  private pool: Pool;
-  private cache: LRUCache<string, boolean>;
-  private static readonly CACHE_TTL = 5000; // 5 seconds
-  private static readonly QUERY_TIMEOUT = 2000; // 2 seconds
+  private lastCheck: number = 0;
+  private lastStatus: boolean = false;
+  private readonly cacheTTL: number = 5000; // 5 second cache
+  private checkInProgress: Promise<boolean> | null = null;
 
-  constructor(config: PoolConfig) {
-    this.pool = new Pool(config);
-    this.cache = new LRUCache({
-      max: 1,
-      ttl: DatabaseHealthMonitor.CACHE_TTL
-    });
-  }
+  async checkHealth(timeoutMs: number): Promise<boolean> {
+    const now = Date.now();
 
-  async checkHealth(): Promise<boolean> {
-    const cacheKey = 'db_health';
-    const cachedStatus = this.cache.get(cacheKey);
-    
-    if (cachedStatus !== undefined) {
-      return cachedStatus;
+    // Return cached result if valid
+    if (now - this.lastCheck < this.cacheTTL) {
+      return this.lastStatus;
     }
+
+    // Prevent multiple simultaneous checks
+    if (this.checkInProgress) {
+      return this.checkInProgress;
+    }
+
+    // Perform new health check
+    this.checkInProgress = this.performCheck(timeoutMs);
 
     try {
-      const client = await this.pool.connect();
-      try {
-        await Promise.race([
-          client.query('SELECT 1'),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Query timeout')), 
-            DatabaseHealthMonitor.QUERY_TIMEOUT)
-          )
-        ]);
-        
-        const status = true;
-        this.cache.set(cacheKey, status);
-        return status;
-      } finally {
-        client.release();
-      }
-    } catch (error) {
-      const status = false;
-      this.cache.set(cacheKey, status);
+      const status = await this.checkInProgress;
+      this.lastStatus = status;
+      this.lastCheck = now;
       return status;
+    } finally {
+      this.checkInProgress = null;
     }
   }
 
-  async close(): Promise<void> {
-    await this.pool.end();
+  private async performCheck(timeoutMs: number): Promise<boolean> {
+    try {
+      const db = await getDbConnection();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Database check timeout')), timeoutMs);
+      });
+
+      await Promise.race([
+        db.query('SELECT 1'),
+        timeoutPromise
+      ]);
+
+      return true;
+    } catch (error) {
+      console.error('Database health check failed:', error);
+      return false;
+    }
   }
 }
