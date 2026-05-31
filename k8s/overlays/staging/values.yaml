@@ -1,0 +1,14 @@
+# Auto-updated by Release & Deploy Agent
+image:
+  tag: "v1.0.0-test"
+replicaCount: 2
+strategy:
+  type: rolling
+  canary:
+    steps:
+      - setWeight: 20
+      - pause: {duration: 5m}
+      - setWeight: 50
+      - pause: {duration: 5m}
+      - setWeight: 80
+      - pause: {duration: 5m}
