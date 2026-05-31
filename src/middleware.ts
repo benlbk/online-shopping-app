@@ -8,7 +8,7 @@ export function middleware(request: NextRequest) {
     const response = NextResponse.next();
     response.headers.set('X-RateLimit-Limit', '60');
     response.headers.set('X-RateLimit-Remaining', '59');
-    response.headers.set('X-RateLimit-Reset', String(Date.now() + 60000));
+    response.headers.set('X-RateLimit-Reset', new Date(Date.now() + 60000).toISOString());
     return response;
   }
 
