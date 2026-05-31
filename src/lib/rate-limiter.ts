@@ -1,46 +1,56 @@
-import { redis } from './redis';
-import { promisify } from 'util';
+import { Redis } from 'ioredis';
+
+interface RateLimiterOptions {
+  windowMs: number;
+  max: number;
+}
 
 export class RateLimiter {
-  private key: string;
-  private limit: number;
-  private window: number;
+  private redis: Redis;
+  private options: RateLimiterOptions;
 
-  constructor(key: string, limit: number, windowInSeconds: number) {
-    this.key = `rate_limit:${key}`;
-    this.limit = limit;
-    this.window = windowInSeconds;
+  constructor(options: RateLimiterOptions) {
+    this.options = options;
+    this.redis = new Redis(process.env.REDIS_URL!, {
+      maxRetriesPerRequest: 2,
+      enableOfflineQueue: false,
+      connectTimeout: 1000
+    });
   }
 
   async check(): Promise<{ allowed: boolean; remaining: number }> {
-    const multi = redis.multi();
-    const now = Math.floor(Date.now() / 1000);
-    
     try {
-      // Remove expired entries
-      multi.zremrangebyscore(this.key, 0, now - this.window);
-      
-      // Count existing entries
-      multi.zcard(this.key);
-      
-      // Add new entry
-      multi.zadd(this.key, now, `${now}-${Math.random()}`);
-      
-      // Set expiry on the set
-      multi.expire(this.key, this.window);
-      
-      const execAsync = promisify(multi.exec).bind(multi);
-      const results = await execAsync();
-      
-      const count = results[1] as number;
-      const remaining = Math.max(0, this.limit - count);
-      const allowed = count < this.limit;
+      const key = 'rate_limit:health_check';
+      const now = Date.now();
+      const windowStart = now - this.options.windowMs;
 
-      return { allowed, remaining };
+      // Remove old entries
+      await this.redis.zremrangebyscore(key, 0, windowStart);
+
+      // Count requests in current window
+      const count = await this.redis.zcard(key);
+
+      if (count >= this.options.max) {
+        return { allowed: false, remaining: 0 };
+      }
+
+      // Add new request
+      await this.redis.zadd(key, now.toString(), now.toString());
+      await this.redis.expire(key, Math.ceil(this.options.windowMs / 1000));
+
+      return {
+        allowed: true,
+        remaining: this.options.max - count - 1
+      };
     } catch (error) {
       console.error('Rate limiter error:', error);
-      // Fail open with limited remaining in case of Redis errors
+      // Fail open if Redis is down
       return { allowed: true, remaining: 1 };
+    } finally {
+      // Clean up Redis connection
+      if (this.redis.status === 'ready') {
+        await this.redis.quit();
+      }
     }
   }
 }
